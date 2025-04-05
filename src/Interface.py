@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from Traitement_données import *
+from Thermistances_finale import *
 import numpy as np
 import csv
 from datetime import datetime, timedelta
@@ -229,7 +229,10 @@ class InterfaceGraphique(App):
             self.fichier.close()
             
         self.donnees = {k: [] for k in self.donnees}  # Réinitialisation
-
+        
 if __name__ == "__main__":
+    print("Création de l'application...")
     app = InterfaceGraphique()
+    print("Lancement de mainloop...")
     app.mainloop()
+    print("Fin de mainloop.")

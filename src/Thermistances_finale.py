@@ -10,7 +10,7 @@ VREF = 3.3  # Tension de référence en Volts
 R_FIXED = 4700  # Résistance de référence (10 kΩ), à ajuster si besoin
 
 # Coefficients Steinhart-Hart chargés depuis le fichier "coefficients.npy"
-coefficients = np.load("coefficients.npy", allow_pickle=True)
+coefficients = np.load("data/raw/coefficients.npy", allow_pickle=True)
 
 
 # Fonction pour calculer la température à partir de la résistance
