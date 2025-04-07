@@ -7,7 +7,7 @@ import time
 
 # Constantes du circuit
 VREF = 3.3  # Tension de référence en Volts
-R_FIXED = 4700  # Résistance de référence (10 kΩ), à ajuster si besoin
+R_FIXED = 4700  # Résistance de référence (4.7 kΩ), à ajuster si besoin
 
 # Coefficients Steinhart-Hart chargés depuis le fichier "coefficients.npy"
 coefficients = np.load("data/raw/coefficients.npy", allow_pickle=True)
