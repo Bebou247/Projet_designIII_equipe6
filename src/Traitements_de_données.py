@@ -86,6 +86,8 @@ class TraitementDonnees:
         return dict((name, temp) for (name, _), temp in zip(self.positions, temperatures))
 
     def afficher_heatmap_dans_figure(self, temperature_dict, fig):
+        import matplotlib.pyplot as plt
+
         fig.clear()
         ax = fig.add_subplot(111)
 
@@ -95,33 +97,92 @@ class TraitementDonnees:
             y.append(pos[1])
             t.append(temperature_dict[name])
 
-        rbf = Rbf(x, y, t, function='linear')
-        xi, yi = np.meshgrid(np.linspace(min(x), max(x), 100),
-                             np.linspace(min(y), max(y), 100))
-        ti = rbf(xi, yi)
+        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.1)
+        grid_size = 200
+        r_max = max(np.hypot(np.array(x), np.array(y))) + 1
 
-        contour = ax.contourf(xi, yi, ti, levels=100)
+        xi, yi = np.meshgrid(
+            np.linspace(-r_max, r_max, grid_size),
+            np.linspace(-r_max, r_max, grid_size)
+        )
+
+        ti = rbf(xi, yi)
+        mask = xi**2 + yi**2 > r_max**2
+        ti_masked = np.ma.array(ti, mask=mask)
+
+        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
         fig.colorbar(contour, ax=ax, label="Température (°C)")
-        ax.set_title("Heatmap des températures")
+        ax.set_aspect('equal')
+        ax.set_title("Map de chaleur des températures des thermistances")
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
+        ax.set_xlim(-r_max, r_max)
+        ax.set_ylim(-r_max, r_max)
         fig.tight_layout()
+
+    def demarrer_acquisition_live(self, interval=0.2):
+        import matplotlib.pyplot as plt
+        import time
+        import os
+        import csv
+        from datetime import datetime
+        from pathlib import Path
+
+        if not self.est_connecte() and not self.simulation:
+            print("Arduino non connecté. Wake up le moron!")
+            return
+
+        print("🚀 Acquisition live shit")
+        fig = plt.figure(figsize=(6, 6))
+        plt.ion()
+        fig.show()
+
+        # Stocker les données en mémoire
+        all_data = []
+        headers = [name for name, _ in self.positions] + ["T_ref", "timestamp"]
+
+        try:
+            while True:
+                data = self.get_temperatures()
+
+                if data:
+                    os.system("clear")  # ou "cls" pour Windows
+                    print("=" * 60)
+                    print("Températures des 24 thermistances")
+                    print("-" * 60)
+                    for name, temp in data.items():
+                        print(f"{name:<6} : {temp:6.2f} °C")
+                    print("=" * 60)
+
+                    self.afficher_heatmap_dans_figure(data, fig)
+                    fig.canvas.draw()
+                    fig.canvas.flush_events()
+
+                    ligne = [data[name] for name, _ in self.positions]
+                    ligne.append(25.0)  # T_ref
+                    ligne.append(datetime.now().isoformat(timespec='seconds'))
+                    all_data.append(ligne)
+
+                else:
+                    print("Données incomplètes ou non reçues.")
+
+                time.sleep(interval)
+
+        except KeyboardInterrupt:
+            print("\n Acquisition stoppée. Sauvegarde en cours...")
+
+            desktop_path = Path.home() / "Desktop"
+            filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            csv_path = desktop_path / filename
+
+            with open(csv_path, mode='w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(all_data)
+
+            print(f"Données sauvegardées dans : {csv_path}")
 
 
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    td = TraitementDonnees(simulation=False) 
-    if not td.est_connecte():
-        print("Arduino non connecté. Aucune acquisition, aucune heatmap, connecte le el cave")
-    else:
-        data = td.get_temperatures()
-
-        if data:
-            fig = plt.figure(figsize=(6, 6))
-            td.afficher_heatmap_dans_figure(data, fig)
-            plt.show()
-        else:
-            print("⚠️ Aucune donnée reçue.")
-
-
+    td = TraitementDonnees(simulation=False)
+    td.demarrer_acquisition_live(interval=0.2)
