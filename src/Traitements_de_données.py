@@ -2,10 +2,10 @@ import serial
 import numpy as np
 from scipy.interpolate import Rbf
 import re
-
+import time
 
 class TraitementDonnees:
-    VREF = 3.3
+    VREF = 2.956
     R_FIXED = 4700
 
     def __init__(self, port="/dev/cu.usbmodem14201", coeffs_path="data/raw/coefficients.npy", simulation=False):
@@ -19,8 +19,9 @@ class TraitementDonnees:
             ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R12", (-4.5, 8)),
             ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
             ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
-            ("R21", (4.5, -8)), ("R22", (-4.5, -8)), ("R23", (3.5, -11.25)), ("R24", (-3.5, -11.25))
+            ("R21", (4.5, -8))
         ]
+        self.indices_à_garder = list(range(21)) 
 
         if self.simulation:
             self.ser = None
@@ -51,55 +52,74 @@ class TraitementDonnees:
 
     def lire_donnees(self):
         if self.simulation:
-            return {i: np.random.uniform(0.4, 2.6) for i in range(24)}
+            return {i: np.random.uniform(0.4, 2.6) for i in self.indices_à_garder}
 
         if self.ser is None:
             return None
 
+        self.ser.reset_input_buffer()
         voltages_dict = {}
+        start_time = time.time()
+        timeout_sec = 2
+
         while True:
-            line = self.ser.readline().decode().strip()
+            if time.time() - start_time > timeout_sec:
+                print("⚠️ Temps de lecture dépassé, données incomplètes.")
+                return None
+
+            try:
+                line = self.ser.readline().decode(errors='ignore').strip()
+            except Exception as e:
+                continue
+
             if not line:
                 continue
+
             if "Fin du balayage" in line:
                 break
 
             match = re.search(r"Canal (\d+): ([\d.]+) V", line)
             if match:
                 canal = int(match.group(1))
-                if 0 <= canal <= 23:
+                if canal in self.indices_à_garder:
                     voltages_dict[canal] = float(match.group(2))
 
-        return voltages_dict if len(voltages_dict) == 24 else None
+        if len(voltages_dict) != len(self.indices_à_garder):
+            print(f"⚠️ Seulement {len(voltages_dict)}/{len(self.indices_à_garder)} canaux reçus.")
+            return None
+
+        return voltages_dict
 
     def get_temperatures(self):
         data = self.lire_donnees()
         if data is None:
             return None
 
-        voltages = [data[i] for i in range(24)]
+        voltages = [data[i] for i in self.indices_à_garder]
         resistances = [self.compute_resistance(v) for v in voltages]
         temperatures = [
             self.compute_temperature(resistances[i], self.coefficients[i])
-            for i in range(24)
+            for i in self.indices_à_garder
         ]
-        return dict((name, temp) for (name, _), temp in zip(self.positions, temperatures))
+        return dict((self.positions[i][0], temp) for i, temp in zip(self.indices_à_garder, temperatures))
 
     def afficher_heatmap_dans_figure(self, temperature_dict, fig):
+
         import matplotlib.pyplot as plt
 
         fig.clear()
         ax = fig.add_subplot(111)
 
         x, y, t = [], [], []
-        for (name, pos) in self.positions:
+        for i in self.indices_à_garder:
+            name, pos = self.positions[i]
             x.append(pos[0])
             y.append(pos[1])
             t.append(temperature_dict[name])
 
-        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.1)
+        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.5)
         grid_size = 200
-        r_max = max(np.hypot(np.array(x), np.array(y))) + 1
+        r_max = 12.5 
 
         xi, yi = np.meshgrid(
             np.linspace(-r_max, r_max, grid_size),
@@ -112,13 +132,20 @@ class TraitementDonnees:
 
         contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
         fig.colorbar(contour, ax=ax, label="Température (°C)")
+
+    # 💡 Ajout des points des thermistances et des labels
+        ax.scatter(x, y, color='black', marker='o', s=25, label='Thermistances')
+        for i, name in enumerate([self.positions[i][0] for i in self.indices_à_garder]):
+            ax.annotate(name, (x[i], y[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
+
         ax.set_aspect('equal')
-        ax.set_title("Map de chaleur des températures des thermistances")
+        ax.set_title("Map de chaleur des températures (R1 à R21)")
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
         ax.set_xlim(-r_max, r_max)
         ax.set_ylim(-r_max, r_max)
         fig.tight_layout()
+
 
     def demarrer_acquisition_live(self, interval=0.2):
         import matplotlib.pyplot as plt
@@ -129,26 +156,25 @@ class TraitementDonnees:
         from pathlib import Path
 
         if not self.est_connecte() and not self.simulation:
-            print("Arduino non connecté. Wake up le moron!")
+            print("Arduino non connecté.")
             return
 
-        print("🚀 Acquisition live shit")
+        print("🚀 Acquisition live en cours... (Ctrl+C pour arrêter)")
         fig = plt.figure(figsize=(6, 6))
         plt.ion()
         fig.show()
 
-        # Stocker les données en mémoire
         all_data = []
-        headers = [name for name, _ in self.positions] + ["T_ref", "timestamp"]
+        headers = [self.positions[i][0] for i in self.indices_à_garder] + ["T_ref", "timestamp"]
 
         try:
             while True:
                 data = self.get_temperatures()
 
                 if data:
-                    os.system("clear")  # ou "cls" pour Windows
+                    os.system("clear")
                     print("=" * 60)
-                    print("Températures des 24 thermistances")
+                    print("Températures des 21 thermistances")
                     print("-" * 60)
                     for name, temp in data.items():
                         print(f"{name:<6} : {temp:6.2f} °C")
@@ -158,18 +184,18 @@ class TraitementDonnees:
                     fig.canvas.draw()
                     fig.canvas.flush_events()
 
-                    ligne = [data[name] for name, _ in self.positions]
-                    ligne.append(25.0)  # T_ref
+                    ligne = [data[name] for name in data]
+                    ligne.append(25.0)
                     ligne.append(datetime.now().isoformat(timespec='seconds'))
                     all_data.append(ligne)
 
                 else:
-                    print("Données incomplètes ou non reçues.")
+                    print("⚠️ Données incomplètes ou non reçues.")
 
                 time.sleep(interval)
 
         except KeyboardInterrupt:
-            print("\n Acquisition stoppée. Sauvegarde en cours...")
+            print("\n🛑 Acquisition stoppée. Sauvegarde du fichier CSV...")
 
             desktop_path = Path.home() / "Desktop"
             filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -180,7 +206,7 @@ class TraitementDonnees:
                 writer.writerow(headers)
                 writer.writerows(all_data)
 
-            print(f"Données sauvegardées dans : {csv_path}")
+            print(f"✅ Données sauvegardées dans : {csv_path}")
 
 
 if __name__ == "__main__":

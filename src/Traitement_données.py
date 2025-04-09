@@ -1,140 +1,208 @@
+import serial
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.interpolate import Rbf
-from scipy.optimize import curve_fit
-from matplotlib.patches import Ellipse
-
-coefficients = np.load("coefficients.npy")
-print(coefficients)  # Affiche les coefficients
+import re
+import time
 
 
-# Paramètres
-R25 = 10000   # Résistance à 25°C (10kΩ)
-beta = 3950    # Coefficient beta standard
-V_ref = 3.3     # Tension d'alimentation
-adc_resolution = 1023
-R_fixed = 4700   # Résistance ajustée
-plate_size = 25.0  # Diamètre total de la plaque en mm
+class TraitementDonnees:
+    VREF = 3.3
+    R_FIXED = 10000
 
-# Positions des thermistances (coordonnées en mm)
-thermistor_positions = [
-    (-3, 0), (-11, 0), (3, 0), (11, 0), (0, -2.5), (8, -2.5),
-    (-8, -2.5), (0, -5.5), (8, -5.5), (-8, -5.5), (4.5, -8), (-4.5, -8),
-    (3.5, -11.25), (-3.5, -11.25), (0, 2.5), (8, 2.5), (-8, 2.5),
-    (0, 5.5), (8, 5.5), (-8, 5.5), (4.5, 8), (-4.5, 8), (4, 11.25), (-4, 11.25)
-]
+    def __init__(self, port="/dev/cu.usbmodem14201", coeffs_path="data/raw/coefficients.npy", simulation=False):
+        self.port = port
+        self.simulation = simulation
+        self.coefficients = np.load(coeffs_path, allow_pickle=True)
 
-positions_array = np.array(thermistor_positions)
-x, y = positions_array[:, 0], positions_array[:, 1]
+        self.positions = [
+            ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
+            ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
+            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R12", (-4.5, 8)),
+            ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
+            ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
+            ("R21", (4.5, -8)), ("R22", (-4.5, -8)), ("R23", (3.5, -11.25)), ("R24", (-3.5, -11.25))
+        ]
 
-def a4dc_to_temperature(adc_value):
-    """Conversion ADC vers température avec contrôle des limites"""
-    V_out = adc_value * V_ref / adc_resolution
-    V_out = np.clip(V_out, 0.1, V_ref-0.1)
-    R_therm = R_fixed * (V_ref - V_out) / V_out
-    steinhart = 1/(25 + 273.15) + (1/beta)*np.log(R_therm/R25)
-    return (1/steinhart) - 273.15
+        if self.simulation:
+            self.ser = None
+            print("[SIMULATION] Aucune connexion série établie.")
+        else:
+            try:
+                self.ser = serial.Serial(self.port, 9600, timeout=1)
+                print(f"[INFO] Port série connecté sur {self.port}")
+            except Exception as e:
+                print(f"[ERREUR] Impossible d'ouvrir le port série : {e}")
+                self.ser = None
 
+    def est_connecte(self):
+        return self.ser is not None
 
-def gaussian_2d(xy, amplitude, x0_norm, y0_norm, sigma_x_norm, sigma_y_norm, offset):
-    """Gaussienne 2D avec coordonnées normalisées"""
-    x, y = xy
-    return offset + amplitude * np.exp(
-        -(((x-x0_norm)/sigma_x_norm)**2 + ((y-y0_norm)/sigma_y_norm)**2) / 2)
+    def steinhart_hart_temperature(self, R, A, B, C):
+        return 1 / (A + B * np.log(R) + C * (np.log(R))**3)
 
-def estimate_laser_wavelength(temperatures):
-    """Estimation simulée de la longueur d'onde basée sur la température"""
-    max_temp = np.max(temperatures)
-    base_wavelength = 1064  # Longueur d'onde typique d'un laser Nd:YAG en nm
-    wavelength = base_wavelength - 0.1 * (max_temp - 25)  # Variation fictive avec la température
-    return np.clip(wavelength, 1000, 1100)
+    def compute_resistance(self, voltage):
+        if voltage >= self.VREF:
+            return float('inf')
+        return self.R_FIXED * (voltage / (self.VREF - voltage))
 
-def estimate_laser_power(temperatures):
-    """Estimation simulée de la puissance basée sur la température maximale"""
-    max_temp = np.max(temperatures)
-    # Relation fictive entre température et puissance
-    power = 0.5 * (max_temp - 25)  # 0.5W par degré au-dessus de 25°C
-    return np.clip(power, 0, 10)  # Limite la puissance entre 0 et 10W
+    def compute_temperature(self, resistance, coeffs):
+        A, B, C = coeffs
+        kelvin = self.steinhart_hart_temperature(resistance, A, B, C)
+        return kelvin - 273.15
 
-def create_or_update_heatmap(temperatures, ax=None):
-    # Interpolation haute résolution
-    xi = yi = np.linspace(-12.5, 12.5, 1000)
-    Xi, Yi = np.meshgrid(xi, yi)
-    rbf = Rbf(x, y, temperatures, function='thin_plate', smooth=0.5)
-    Zi = rbf(Xi, Yi)
+    def lire_donnees(self):
+        if self.simulation:
+            return {i: np.random.uniform(0.4, 2.6) for i in range(24)}
 
-    # Trouver le point central 
-    max_temp_index = np.unravel_index(np.argmax(Zi), Zi.shape)
-    x0 = xi[max_temp_index[1]]
-    y0 = yi[max_temp_index[0]]
+        if self.ser is None:
+            return None
 
-    if ax is None:
-        fig, ax = plt.subplots()
-    else:
-        ax.clear()
+        # 💥 Vider le buffer série pour éviter les délais
+        self.ser.reset_input_buffer()
 
-    # Dessin de la heatmap
-    im = ax.imshow(Zi, extent=[-12.5,12.5,-12.5,12.5], 
-                  origin='lower', cmap='inferno', vmin=25, vmax=45)
-    
-    # Marquer le point central
-    ax.plot(x0, y0, 'wo', markersize=10, markeredgecolor='k')
+        voltages_dict = {}
+        start_time = time.time()
+        timeout_sec = 2  # max 2 sec de lecture
 
-    ax.set_title("Distribution thermique du faisceau laser")
-    ax.set_xlabel("Position X (mm)")
-    ax.set_ylabel("Position Y (mm)")
+        while True:
+            if time.time() - start_time > timeout_sec:
+                print("⚠️ Temps de lecture dépassé, données incomplètes.")
+                return None
 
-    return Zi, x0, y0, im
+            try:
+                line = self.ser.readline().decode(errors='ignore').strip()
+            except Exception as e:
+                print(f"Erreur de lecture série : {e}")
+                continue
 
-# Le code pour le calcul du diamètre du faisceau est commenté ci-dessous:
-"""
-    # Normalisation des coordonnées pour l'ajustement
-    x_flat, y_flat = Xi.flatten(), Yi.flatten()
-    x_norm = (x_flat + 12.5) / 25.0
-    y_norm = (y_flat + 12.5) / 25.0
+            if not line:
+                continue
 
-    # Ajustement avec contraintes réalistes
-    initial_guess = [np.max(Zi), 0.5, 0.5, 0.15, 0.15, np.min(Zi)]
-    bounds = (
-        [0, 0.4, 0.4, 0.05, 0.05, 0],
-        [np.inf, 0.6, 0.6, 0.3, 0.3, np.inf]
-    )
+            if "Fin du balayage" in line:
+                break
 
-    popt, _ = curve_fit(gaussian_2d, (x_norm, y_norm), Zi.flatten(), p0=initial_guess, bounds=bounds)
+            match = re.search(r"Canal (\d+): ([\d.]+) V", line)
+            if match:
+                canal = int(match.group(1))
+                if 0 <= canal <= 23:
+                    voltages_dict[canal] = float(match.group(2))
 
-    # Conversion des paramètres normalisés en mm
-    amplitude, x0_norm, y0_norm, sigma_x_norm, sigma_y_norm, offset = popt
-    x0 = x0_norm * 25.0 - 12.5
-    y0 = y0_norm * 25.0 - 12.5
-    sigma_x = sigma_x_norm * 12.5  # Conversion du sigma normalisé
-    sigma_y = sigma_y_norm * 12.5
+        if len(voltages_dict) != 24:
+            print(f"⚠️ Seulement {len(voltages_dict)}/24 canaux reçus.")
+            return None
 
-    # Calcul du FWHM réaliste
-    fwhm_x = 2 * sigma_x * np.sqrt(2 * np.log(2))
-    fwhm_y = 2 * sigma_y * np.sqrt(2 * np.log(2))
-    fwhm_avg = (fwhm_x + fwhm_y) / 2
+        return voltages_dict
 
-    # Dessin de l'ellipse
-    ellipse = Ellipse((x0, y0), width=fwhm_x, height=fwhm_y,
-                     angle=0, fill=False, color='cyan', linewidth=2, linestyle='--')
-    ax.add_patch(ellipse)
-"""
+    def get_temperatures(self):
+        data = self.lire_donnees()
+        if data is None:
+            return None
+
+        voltages = [data[i] for i in range(24)]
+        resistances = [self.compute_resistance(v) for v in voltages]
+        temperatures = [
+            self.compute_temperature(resistances[i], self.coefficients[i])
+            for i in range(24)
+        ]
+        return dict((name, temp) for (name, _), temp in zip(self.positions, temperatures))
+
+    def afficher_heatmap_dans_figure(self, temperature_dict, fig):
+        import matplotlib.pyplot as plt
+
+        fig.clear()
+        ax = fig.add_subplot(111)
+
+        x, y, t = [], [], []
+        for (name, pos) in self.positions:
+            x.append(pos[0])
+            y.append(pos[1])
+            t.append(temperature_dict[name])
+
+        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.1)
+        grid_size = 200
+        r_max = max(np.hypot(np.array(x), np.array(y))) + 1
+
+        xi, yi = np.meshgrid(
+            np.linspace(-r_max, r_max, grid_size),
+            np.linspace(-r_max, r_max, grid_size)
+        )
+
+        ti = rbf(xi, yi)
+        mask = xi**2 + yi**2 > r_max**2
+        ti_masked = np.ma.array(ti, mask=mask)
+
+        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
+        fig.colorbar(contour, ax=ax, label="Température (°C)")
+        ax.set_aspect('equal')
+        ax.set_title("Map de chaleur des températures des thermistances")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.set_xlim(-r_max, r_max)
+        ax.set_ylim(-r_max, r_max)
+        fig.tight_layout()
+
+    def demarrer_acquisition_live(self, interval=0.2):
+        import matplotlib.pyplot as plt
+        import time
+        import os
+        import csv
+        from datetime import datetime
+        from pathlib import Path
+
+        if not self.est_connecte() and not self.simulation:
+            print("Arduino non connecté. Wake up le moron!")
+            return
+
+        print("🚀 Acquisition live en cours... (Ctrl+C pour arrêter)")
+        fig = plt.figure(figsize=(6, 6))
+        plt.ion()
+        fig.show()
+
+        all_data = []
+        headers = [name for name, _ in self.positions] + ["T_ref", "timestamp"]
+
+        try:
+            while True:
+                data = self.get_temperatures()
+
+                if data:
+                    os.system("clear")
+                    print("=" * 60)
+                    print("Températures des 24 thermistances")
+                    print("-" * 60)
+                    for name, temp in data.items():
+                        print(f"{name:<6} : {temp:6.2f} °C")
+                    print("=" * 60)
+
+                    self.afficher_heatmap_dans_figure(data, fig)
+                    fig.canvas.draw()
+                    fig.canvas.flush_events()
+
+                    ligne = [data[name] for name, _ in self.positions]
+                    ligne.append(25.0)
+                    ligne.append(datetime.now().isoformat(timespec='seconds'))
+                    all_data.append(ligne)
+
+                else:
+                    print("⚠️ Données incomplètes ou non reçues.")
+
+                time.sleep(interval)
+
+        except KeyboardInterrupt:
+            print("\n🛑 Acquisition stoppée. Sauvegarde du fichier CSV...")
+
+            desktop_path = Path.home() / "Desktop"
+            filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            csv_path = desktop_path / filename
+
+            with open(csv_path, mode='w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(all_data)
+
+            print(f"✅ Données sauvegardées dans : {csv_path}")
+
 
 if __name__ == "__main__":
-    # Test des fonctions
-    adc_values = generate_realistic_adc()
-    temperatures = [adc_to_temperature(adc) for adc in adc_values]
-    
-    fig, ax = plt.subplots()
-    Zi, x0, y0 = create_or_update_heatmap(temperatures, ax)
-    
-    wavelength = estimate_laser_wavelength(temperatures)
-    power = estimate_laser_power(temperatures)
-    
-    plt.colorbar(ax.images[0], label='Température (°C)')
-    
-    print(f"Centre du faisceau: ({x0:.2f} mm, {y0:.2f} mm)")
-    print(f"Longueur d'onde estimée: {wavelength:.0f} nm")
-    print(f"Puissance estimée: {power:.1f} W")
-    
-    plt.show()
+    td = TraitementDonnees(simulation=False)
+    td.demarrer_acquisition_live(interval=0.2)
