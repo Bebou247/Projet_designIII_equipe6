@@ -3,9 +3,14 @@ import numpy as np
 from scipy.interpolate import Rbf
 import re
 import time
+import matplotlib.pyplot as plt
+import os
+import csv
+from datetime import datetime
+from pathlib import Path
 
 class TraitementDonnees:
-    VREF = 2.956
+    VREF = 3.02
     R_FIXED = 4700
 
     def __init__(self, port="/dev/cu.usbmodem14201", coeffs_path="data/raw/coefficients.npy", simulation=False):
@@ -13,15 +18,16 @@ class TraitementDonnees:
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
 
+        # 🔁 R24 à l’ancienne position de R24 (canal 11), R12 supprimée
         self.positions = [
             ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
             ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
-            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R12", (-4.5, 8)),
+            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-3.5, -11.25)),
             ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
             ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
             ("R21", (4.5, -8))
         ]
-        self.indices_à_garder = list(range(21)) 
+        self.indices_à_garder = list(range(21))  # Canaux 0 à 20
 
         if self.simulation:
             self.ser = None
@@ -95,18 +101,19 @@ class TraitementDonnees:
         if data is None:
             return None
 
-        voltages = [data[i] for i in self.indices_à_garder]
-        resistances = [self.compute_resistance(v) for v in voltages]
-        temperatures = [
-            self.compute_temperature(resistances[i], self.coefficients[i])
-            for i in self.indices_à_garder
-        ]
+        temperatures = []
+        for i in self.indices_à_garder:
+            if i == 11:
+                coeffs = self.coefficients[23]  # 🔁 canal 11 → R24
+            else:
+                coeffs = self.coefficients[i]
+            resistance = self.compute_resistance(data[i])
+            temp = self.compute_temperature(resistance, coeffs)
+            temperatures.append(temp)
+
         return dict((self.positions[i][0], temp) for i, temp in zip(self.indices_à_garder, temperatures))
 
     def afficher_heatmap_dans_figure(self, temperature_dict, fig):
-
-        import matplotlib.pyplot as plt
-
         fig.clear()
         ax = fig.add_subplot(111)
 
@@ -119,7 +126,7 @@ class TraitementDonnees:
 
         rbf = Rbf(x, y, t, function='multiquadric', smooth=0.5)
         grid_size = 200
-        r_max = 12.5 
+        r_max = 12.5
 
         xi, yi = np.meshgrid(
             np.linspace(-r_max, r_max, grid_size),
@@ -132,9 +139,7 @@ class TraitementDonnees:
 
         contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
         fig.colorbar(contour, ax=ax, label="Température (°C)")
-
-    # 💡 Ajout des points des thermistances et des labels
-        ax.scatter(x, y, color='black', marker='o', s=25, label='Thermistances')
+        ax.scatter(x, y, color='black', marker='o', s=25)
         for i, name in enumerate([self.positions[i][0] for i in self.indices_à_garder]):
             ax.annotate(name, (x[i], y[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
 
@@ -146,15 +151,7 @@ class TraitementDonnees:
         ax.set_ylim(-r_max, r_max)
         fig.tight_layout()
 
-
     def demarrer_acquisition_live(self, interval=0.2):
-        import matplotlib.pyplot as plt
-        import time
-        import os
-        import csv
-        from datetime import datetime
-        from pathlib import Path
-
         if not self.est_connecte() and not self.simulation:
             print("Arduino non connecté.")
             return
@@ -174,7 +171,7 @@ class TraitementDonnees:
                 if data:
                     os.system("clear")
                     print("=" * 60)
-                    print("Températures des 21 thermistances")
+                    print("Températures mesurées")
                     print("-" * 60)
                     for name, temp in data.items():
                         print(f"{name:<6} : {temp:6.2f} °C")
@@ -211,4 +208,4 @@ class TraitementDonnees:
 
 if __name__ == "__main__":
     td = TraitementDonnees(simulation=False)
-    td.demarrer_acquisition_live(interval=0.2)
+    td.demarrer_acquisition_live(interval=0.05)
