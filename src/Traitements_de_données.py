@@ -28,7 +28,7 @@ class TraitementDonnees:
             ("R21", (4.5, -8))
         ]
 
-        self.indices_à_garder = list(range(21)) + [24]  # Canal 24 = R25 (dans l’ailette)
+        self.indices_à_garder = list(range(21)) + [24]
         self.canaux_photodiodes = list(range(25, 31))
 
         if self.simulation:
@@ -58,6 +58,24 @@ class TraitementDonnees:
         kelvin = self.steinhart_hart_temperature(resistance, A, B, C)
         return kelvin - 273.15
 
+    def estimate_laser_power(self, temp_initial, temp_measured, time, position, laser_center=(0, 0)):
+        delta_t = temp_measured - temp_initial
+        K = 0.8411
+        tau = 0.9987
+        coeff = 0.9999
+
+        dx = position[0] - laser_center[0]
+        dy = position[1] - laser_center[1]
+        distance = np.sqrt(dx**2 + dy**2)
+        attenuation = np.exp(-distance / 5.0)
+        adjusted_coeff = coeff * attenuation
+
+        denominator = K * (1 - np.exp(-time / tau))
+        denominator = np.where(denominator < 1e-10, 1e-10, denominator)
+
+        estimated_power = (delta_t / denominator) * adjusted_coeff
+        return estimated_power
+
     def lire_donnees(self):
         canaux_requis = self.indices_à_garder + self.canaux_photodiodes
 
@@ -70,7 +88,7 @@ class TraitementDonnees:
         self.ser.reset_input_buffer()
         voltages_dict = {}
         start_time = time.time()
-        timeout_sec = 2
+        timeout_sec = 1
 
         while True:
             if time.time() - start_time > timeout_sec:
@@ -93,6 +111,10 @@ class TraitementDonnees:
                 canal = int(match.group(1))
                 if canal in canaux_requis:
                     voltages_dict[canal] = float(match.group(2))
+
+        if len(voltages_dict) != len(canaux_requis):
+            print(f"Seulement {len(voltages_dict)}/{len(canaux_requis)} canaux reçus.")
+            return None
 
         return voltages_dict
 
@@ -123,6 +145,44 @@ class TraitementDonnees:
 
         return dict(zip(noms, temperatures))
 
+    def afficher_heatmap_dans_figure(self, temperature_dict, fig):
+        fig.clear()
+        ax = fig.add_subplot(111)
+        x, y, t = [], [], []
+        for nom, (xi, yi) in dict(self.positions).items():
+            if nom in temperature_dict:
+                x.append(xi)
+                y.append(yi)
+                t.append(temperature_dict[nom])
+
+        if len(x) < 3:
+            print("Pas assez de données pour générer la heatmap.")
+            return
+
+        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.1)
+        grid_size = 200
+        r_max = 12.25
+        xi, yi = np.meshgrid(
+            np.linspace(-r_max, r_max, grid_size),
+            np.linspace(-r_max, r_max, grid_size)
+        )
+        ti = rbf(xi, yi)
+        mask = xi**2 + yi**2 > (r_max**2)
+        ti_masked = np.ma.array(ti, mask=mask)
+        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
+        fig.colorbar(contour, ax=ax, label="Température (°C")
+        ax.scatter(x, y, color='black', marker='o', s=25)
+        for i, nom in enumerate(x):
+            ax.annotate(list(temperature_dict.keys())[i], (x[i], y[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
+        ax.set_aspect('equal')
+        ax.set_title("Heatmap des thermistances")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.set_xlim(-r_max, r_max)
+        ax.set_ylim(-r_max, r_max)
+        fig.tight_layout()
+        plt.pause(0.001)
+
     def demarrer_acquisition_live(self, interval=0.1):
         if not self.est_connecte() and not self.simulation:
             print("Arduino non connecté.")
@@ -136,7 +196,7 @@ class TraitementDonnees:
         all_data = []
         noms = [self.positions[i][0] if i != 24 else "R25" for i in self.indices_à_garder]
         photodiode_headers = [f"PD{i}" for i in self.canaux_photodiodes]
-        headers = noms + photodiode_headers + ["T_ref", "timestamp"]
+        headers = noms + photodiode_headers + ["Puissance estimée (W)", "T_ref", "timestamp"]
 
         try:
             while True:
@@ -162,10 +222,18 @@ class TraitementDonnees:
                             print(f"PD{i:<2} : {tension:.3f} V")
                     print("=" * 60)
 
-                    ligne = [temp_data.get(name) for name in noms]
-                    ligne += [data_raw.get(i) for i in self.canaux_photodiodes]
-                    ligne.append(25.0)
-                    ligne.append(datetime.now().isoformat(timespec='seconds'))
+                    self.afficher_heatmap_dans_figure(temp_data, fig)
+                    fig.canvas.draw()
+                    fig.canvas.flush_events()
+
+                    t_max = max(temp_data.values())
+                    max_pos = [pos for nom, pos in self.positions if nom in temp_data and temp_data[nom] == t_max]
+                    max_position = max_pos[0] if max_pos else (0, 0)
+                    puissance = self.estimate_laser_power(25.0, t_max, 3.0, max_position)
+
+                    ligne = [temp_data.get(name, "--") for name in noms]
+                    ligne += [data_raw.get(i, "--") for i in self.canaux_photodiodes]
+                    ligne += [puissance, 25.0, datetime.now().isoformat(timespec='seconds')]
                     all_data.append(ligne)
 
                 time.sleep(interval)
@@ -183,7 +251,8 @@ class TraitementDonnees:
                 writer.writerows(all_data)
 
             print(f"Données sauvegardées dans : {csv_path}")
-
+        
+        
 if __name__ == "__main__":
     td = TraitementDonnees(simulation=False)
-    td.demarrer_acquisition_live(interval=0.05)
+    td.demarrer_acquisition_live()
