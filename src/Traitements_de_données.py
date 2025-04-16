@@ -77,45 +77,52 @@ class TraitementDonnees:
         return estimated_power
 
     def lire_donnees(self):
+        # Lecture des données depuis l'Arduino
         canaux_requis = self.indices_à_garder + self.canaux_photodiodes
 
+        # Simulation des données si il y a pas de connexion série
         if self.simulation:
             return {i: np.random.uniform(0.4, 2.6) for i in canaux_requis}
 
+        # Si la connexion série n'est pas établie, on ne peut pas lire les données
         if self.ser is None:
             return None
 
-        # ⚠️ Mieux vaut ne PAS vider le buffer ici car tu risques d'effacer des lignes utiles
         # self.ser.reset_input_buffer()
 
+        # creer un dictionnaire pour stocker les tensions
         voltages_dict = {}
+
+        # Lire les données de l'Arduino
         start_time = time.time()
-        timeout_sec = 2  # ↑ allongé à 2s pour laisser à l'Arduino le temps d'envoyer
+        timeout_sec = 2  # Laisser à l'Arduino le temps d'envoyer les données
 
         while True:
             # Timeout général
             if time.time() - start_time > timeout_sec:
                 print("⚠️ Temps de lecture dépassé, données incomplètes.")
-                break  # ← on sort de la boucle mais on retourne ce qu’on a réussi à lire
+                break  # On sort de la boucle mais on retourne ce qu’on a réussi à lire
 
             try:
                 line = self.ser.readline().decode(errors='ignore').strip()
             except Exception:
                 continue
-
+            # Si la ligne est vide, on continue
             if not line:
                 continue
-
+            
+            # Si on a atteint la fin du balayage, on sort de la boucle
             if "Fin du balayage" in line:
                 break
 
+            # Si on a reçu une ligne de données, on l'analyse de manière à extraire les tensions
             match = re.search(r"Canal (\d+): ([\d.]+) V", line)
             if match:
                 canal = int(match.group(1))
                 if canal in canaux_requis:
                     voltages_dict[canal] = float(match.group(2))
 
-        # ✅ Affichage d'information uniquement si incomplet
+        # Affichage d'information uniquement si incomplet
         if len(voltages_dict) != len(canaux_requis):
             print(f"[INFO] Lecture partielle : {len(voltages_dict)}/{len(canaux_requis)} canaux reçus.")
 
