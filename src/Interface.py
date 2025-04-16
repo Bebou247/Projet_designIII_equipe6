@@ -116,7 +116,7 @@ class MyApp(App):
                     writer.writerow(headers)
                     writer.writerows(self.donnees_enregistrées)
 
-                self.log(f"📁 Données sauvegardées : {chemin_fichier}")
+                self.log(f"Données sauvegardées : {chemin_fichier}")
             except Exception as e:
                 self.log(f"⚠️ Erreur de sauvegarde : {e}")
 
@@ -150,7 +150,7 @@ class MyApp(App):
             try:
                 self.td = TraitementDonnees(simulation=False)
                 if self.td.est_connecte():
-                    self.label_etat.config(text="✅ Arduino reconnecté", foreground="green")
+                    self.label_etat.config(text="Arduino reconnecté", foreground="green")
                     self.log("🔌 Arduino reconnecté")
             except Exception:
                 pass

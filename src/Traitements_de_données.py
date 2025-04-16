@@ -58,76 +58,55 @@ class TraitementDonnees:
         kelvin = self.steinhart_hart_temperature(resistance, A, B, C)
         return kelvin - 273.15
 
-    def estimate_laser_power(self, temp_initial, temp_measured, time, position, laser_center=(0, 0)):
-        delta_t = temp_measured - temp_initial
+    def estimate_laser_power(self, temp_ref, temp_measured, time):
+        delta_t = temp_measured - temp_ref
         K = 0.8411
         tau = 0.9987
         coeff = 0.9999
 
-        dx = position[0] - laser_center[0]
-        dy = position[1] - laser_center[1]
-        distance = np.sqrt(dx**2 + dy**2)
-        attenuation = np.exp(-distance / 5.0)
-        adjusted_coeff = coeff * attenuation
-
         denominator = K * (1 - np.exp(-time / tau))
-        denominator = np.where(denominator < 1e-10, 1e-10, denominator)
+        denominator = max(denominator, 1e-10)
 
-        estimated_power = (delta_t / denominator) * adjusted_coeff
+        estimated_power = (delta_t / denominator) * coeff
         return estimated_power
 
     def lire_donnees(self):
-        # Lecture des données depuis l'Arduino
         canaux_requis = self.indices_à_garder + self.canaux_photodiodes
 
-        # Simulation des données si il y a pas de connexion série
         if self.simulation:
             return {i: np.random.uniform(0.4, 2.6) for i in canaux_requis}
 
-        # Si la connexion série n'est pas établie, on ne peut pas lire les données
         if self.ser is None:
             return None
 
-        # self.ser.reset_input_buffer()
-
-        # creer un dictionnaire pour stocker les tensions
         voltages_dict = {}
-
-        # Lire les données de l'Arduino
         start_time = time.time()
-        timeout_sec = 2  # Laisser à l'Arduino le temps d'envoyer les données
+        timeout_sec = 2
 
         while True:
-            # Timeout général
             if time.time() - start_time > timeout_sec:
                 print("⚠️ Temps de lecture dépassé, données incomplètes.")
-                break  # On sort de la boucle mais on retourne ce qu’on a réussi à lire
+                break
 
             try:
                 line = self.ser.readline().decode(errors='ignore').strip()
             except Exception:
                 continue
-            # Si la ligne est vide, on continue
             if not line:
                 continue
-            
-            # Si on a atteint la fin du balayage, on sort de la boucle
             if "Fin du balayage" in line:
                 break
 
-            # Si on a reçu une ligne de données, on l'analyse de manière à extraire les tensions
             match = re.search(r"Canal (\d+): ([\d.]+) V", line)
             if match:
                 canal = int(match.group(1))
                 if canal in canaux_requis:
                     voltages_dict[canal] = float(match.group(2))
 
-        # Affichage d'information uniquement si incomplet
         if len(voltages_dict) != len(canaux_requis):
             print(f"[INFO] Lecture partielle : {len(voltages_dict)}/{len(canaux_requis)} canaux reçus.")
 
         return voltages_dict if voltages_dict else None
-
 
     def get_temperatures(self, data):
         if data is None:
@@ -201,10 +180,19 @@ class TraitementDonnees:
 
         print("Acquisition live, Ctrl+C pour arrêter ")
         fig = plt.figure(figsize=(6, 6))
+        fig_power = plt.figure(figsize=(6, 3))
+        ax_power = fig_power.add_subplot(111)
+        ax_power.set_title("Puissance estimée du laser (W)")
+        ax_power.set_xlabel("Temps (s)")
+        ax_power.set_ylabel("Puissance (W)")
         plt.ion()
         fig.show()
+        fig_power.show()
 
         all_data = []
+        puissances = []
+        temps = []
+        t0 = time.time()
         noms = [self.positions[i][0] if i != 24 else "R25" for i in self.indices_à_garder]
         photodiode_headers = [f"PD{i}" for i in self.canaux_photodiodes]
         headers = noms + photodiode_headers + ["Puissance estimée (W)", "T_ref", "timestamp"]
@@ -238,19 +226,29 @@ class TraitementDonnees:
                     fig.canvas.flush_events()
 
                     t_max = max(temp_data.values())
-                    max_pos = [pos for nom, pos in self.positions if nom in temp_data and temp_data[nom] == t_max]
-                    max_position = max_pos[0] if max_pos else (0, 0)
-                    puissance = self.estimate_laser_power(25.0, t_max, 3.0, max_position)
+                    t_ref = temp_data.get("R25", 25.0)
+                    puissance = self.estimate_laser_power(t_ref, t_max, 3.0)
+                    puissances.append(puissance)
+                    temps.append(time.time() - t0)
+
+                    ax_power.clear()
+                    ax_power.plot(temps, puissances, color="red")
+                    ax_power.set_title("Puissance estimée du laser (W)")
+                    ax_power.set_xlabel("Temps (s)")
+                    ax_power.set_ylabel("Puissance (W)")
+                    ax_power.grid(True)
+                    fig_power.canvas.draw()
+                    fig_power.canvas.flush_events()
 
                     ligne = [temp_data.get(name, "--") for name in noms]
                     ligne += [data_raw.get(i, "--") for i in self.canaux_photodiodes]
-                    ligne += [puissance, 25.0, datetime.now().isoformat(timespec='seconds')]
+                    ligne += [puissance, t_ref, datetime.now().isoformat(timespec='seconds')]
                     all_data.append(ligne)
 
                 time.sleep(interval)
 
         except KeyboardInterrupt:
-            print("\n🛑 Acquisition stoppée. Sauvegarde du fichier CSV...")
+            print("\n Acquisition stoppée. Sauvegarde du fichier CSV...")
 
             desktop_path = Path.home() / "Desktop"
             filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -262,8 +260,8 @@ class TraitementDonnees:
                 writer.writerows(all_data)
 
             print(f"Données sauvegardées dans : {csv_path}")
-        
-        
+
+
 if __name__ == "__main__":
     td = TraitementDonnees(simulation=False)
     td.demarrer_acquisition_live()
