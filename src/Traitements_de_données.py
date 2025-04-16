@@ -85,15 +85,18 @@ class TraitementDonnees:
         if self.ser is None:
             return None
 
-        self.ser.reset_input_buffer()
+        # ⚠️ Mieux vaut ne PAS vider le buffer ici car tu risques d'effacer des lignes utiles
+        # self.ser.reset_input_buffer()
+
         voltages_dict = {}
         start_time = time.time()
-        timeout_sec = 1
+        timeout_sec = 2  # ↑ allongé à 2s pour laisser à l'Arduino le temps d'envoyer
 
         while True:
+            # Timeout général
             if time.time() - start_time > timeout_sec:
                 print("⚠️ Temps de lecture dépassé, données incomplètes.")
-                return None
+                break  # ← on sort de la boucle mais on retourne ce qu’on a réussi à lire
 
             try:
                 line = self.ser.readline().decode(errors='ignore').strip()
@@ -112,11 +115,12 @@ class TraitementDonnees:
                 if canal in canaux_requis:
                     voltages_dict[canal] = float(match.group(2))
 
+        # ✅ Affichage d'information uniquement si incomplet
         if len(voltages_dict) != len(canaux_requis):
-            print(f"Seulement {len(voltages_dict)}/{len(canaux_requis)} canaux reçus.")
-            return None
+            print(f"[INFO] Lecture partielle : {len(voltages_dict)}/{len(canaux_requis)} canaux reçus.")
 
-        return voltages_dict
+        return voltages_dict if voltages_dict else None
+
 
     def get_temperatures(self, data):
         if data is None:
@@ -160,7 +164,7 @@ class TraitementDonnees:
             return
 
         rbf = Rbf(x, y, t, function='multiquadric', smooth=0.1)
-        grid_size = 200
+        grid_size = 400
         r_max = 12.25
         xi, yi = np.meshgrid(
             np.linspace(-r_max, r_max, grid_size),
