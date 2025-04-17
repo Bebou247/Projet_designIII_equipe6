@@ -25,15 +25,16 @@ class TraitementDonnees:
         self.positions = [
             ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
             ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
-            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-3.5, -11.25)),
+            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-3.5, -11.5)),
             ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
             ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
             ("R21", (4.5, -8))
         ]
-        # Canaux 0 à 20 utilisés pour les thermistances R1-R11, R13-R21, R24(sur canal 11)
+        # J'ai changé tempo la pos de la R24 (-3.5, -11.25) Canaux 0 à 20 utilisés pour les thermistances R1-R11, R13-R21, R24(sur canal 11)
         self.indices_à_garder = list(range(21))
         self.simulation_data = None
-        self.simulation_index = 0  # Te permet de décider à quel rang tu commences
+        self.simulation_index =  0
+        # Te permet de décider à quel rang tu commences
         # Noms des colonnes attendues dans le CSV (basés sur self.positions et self.indices_à_garder)
         self.simulation_columns = [self.positions[i][0] for i in self.indices_à_garder]
 
@@ -44,7 +45,7 @@ class TraitementDonnees:
                 # Chemin vers le fichier CSV relatif au script Test.py
                 script_dir = Path(__file__).parent
                 # Te permet de choisir quel fichier prendre
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 6.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 1.csv"
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
                 self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -269,121 +270,118 @@ class TraitementDonnees:
     # Dans la classe TraitementDonnees (fichier Test.py)
 
     def afficher_heatmap_dans_figure(self, temperature_dict, fig, elapsed_time):
-        fig.clear()
-        ax = fig.add_subplot(111)
+        fig.clear() # Efface toute la figure précédente
 
+        # --- Créer deux sous-graphiques (Axes) côte à côte ---
+        ax1, ax2 = fig.subplots(1, 2) # 1 ligne, 2 colonnes
+
+        # --- Préparation des données (commune aux deux graphiques) ---
         x_orig, y_orig, t_orig = [], [], []
-        valid_temps_list = [] # Pour calculer la moyenne
+        valid_temps_list = []
 
-        # 1. Extraire les données valides des thermistances réelles
+        # 1. Extraire les données valides (inchangé)
         for i in self.indices_à_garder:
             name, pos = self.positions[i]
-            temp_val = temperature_dict.get(name, np.nan) # Utiliser .get pour plus de sûreté
-            if pd.notna(temp_val): # Ignorer les NaN pour l'interpolation et la moyenne
+            temp_val = temperature_dict.get(name, np.nan)
+            if pd.notna(temp_val):
                 x_orig.append(pos[0])
                 y_orig.append(pos[1])
                 t_orig.append(temp_val)
                 valid_temps_list.append(temp_val)
-            # else: # Optionnel: si tu veux afficher les points NaN différemment
-            #     ax.scatter(pos[0], pos[1], color='gray', marker='x', s=30, label='NaN' if name == self.positions[self.indices_à_garder[0]][0] else "") # Marquer les NaN
 
-        # 2. Calculer la température cible pour les bords
+        # 2. Calculer la température de référence/bord (inchangé)
+        can_calculate_laser_pos = False
         if not valid_temps_list:
-            print("[AVERTISSEMENT] Aucune donnée de température valide pour calculer la moyenne des bords.")
-            # Comportement par défaut : utiliser une température fixe ou ne pas ajouter de bords
-            baseline_temp = 20.0 # Exemple: température par défaut pour les bords
-            # Ou tu pourrais choisir de ne pas ajouter de points de bord et retourner
-            # ax.set_title("Données invalides pour la heatmap")
-            # return
+            baseline_temp = 20.0
+            print("[AVERTISSEMENT] Aucune donnée valide pour calculs.")
         else:
             avg_temp = np.mean(valid_temps_list)
-            baseline_temp = avg_temp - 1.0
-            print(f"[INFO HEATMAP] Température moyenne: {avg_temp:.2f}°C, Température des bords: {baseline_temp:.2f}°C")
+            baseline_temp = avg_temp - 1.0 # Référence pour barycentre et bords
             can_calculate_laser_pos = True
-            
+            # print(f"[INFO] T° Moy: {avg_temp:.2f}, T° Réf/Bord: {baseline_temp:.2f}") # Optionnel
+
+        # 3. Calcul du barycentre pondéré (inchangé)
         laser_x, laser_y = None, None
         laser_pos_found = False
-        if can_calculate_laser_pos and len(x_orig) > 0: # Besoin d'au moins un point valide
+        if can_calculate_laser_pos and len(x_orig) > 0:
+            # ... (logique de calcul du barycentre inchangée) ...
             total_weight = 0.0
             weighted_x_sum = 0.0
             weighted_y_sum = 0.0
-                # 3. Calculer les poids et les sommes pondérées
             for i in range(len(x_orig)):
-                # Le poids est l'augmentation de température au carré (donne plus d'importance aux points chauds)
-                # On ignore les points dont la température est inférieure ou égale à la référence
                 delta_temp = t_orig[i] - baseline_temp
-                weight = max(0, delta_temp)**2 # Utilise max(0, delta_temp) si tu ne veux pas le carré
-
-                if weight > 1e-6: # Ignorer les poids négligeables
+                weight = max(0, delta_temp)**2
+                if weight > 1e-6:
                     weighted_x_sum += weight * x_orig[i]
                     weighted_y_sum += weight * y_orig[i]
                     total_weight += weight
-
-            # 4. Calculer la position du barycentre si le poids total est suffisant
             if total_weight > 1e-6:
                 laser_x = weighted_x_sum / total_weight
                 laser_y = weighted_y_sum / total_weight
                 laser_pos_found = True
-                print(f"[INFO LASER] Position estimée (barycentre): ({laser_x:.2f}, {laser_y:.2f})")
-            else:
-                print("[AVERTISSEMENT] Poids total insuffisant pour calculer la position du laser (pas de points significativement chauds?).")
-                laser_pos_found = False
-        else:
-            print("[AVERTISSEMENT] Pas assez de données valides pour tenter le calcul de la position laser.")
-        # --- FIN DE LA NOUVELLE PARTIE ---
-        # 5. Définir les points virtuels sur le périmètre
-        r_max = 12.5 # Le rayon de ta carte thermique
-        num_edge_points = 12 # Plus de points pour une meilleure contrainte (ajustable)
+                # print(f"[INFO LASER BARY] Pos: ({laser_x:.2f}, {laser_y:.2f})") # Optionnel
+            # else: # Optionnel
+                # print("[AVERTISSEMENT BARY] Poids insuffisant.")
+
+        # 4. Interpolation RBF (commune)
+        r_max = 12.5
+        num_edge_points = 12
         edge_angles = np.linspace(0, 2 * np.pi, num_edge_points, endpoint=False)
         edge_x = r_max * np.cos(edge_angles)
         edge_y = r_max * np.sin(edge_angles)
-        edge_t = [baseline_temp] * num_edge_points # Tous les points de bord ont la température cible
+        edge_t = [baseline_temp] * num_edge_points
 
-        # 6. Combiner les points réels et les points de bord
         x_combined = x_orig + list(edge_x)
         y_combined = y_orig + list(edge_y)
         t_combined = t_orig + edge_t
 
-        # 7. Vérifier s'il y a assez de points pour l'interpolation
-        # Rbf a besoin d'au moins N+1 points en N dimensions (ici 2D, donc au moins 3 points)
         if len(x_combined) < 3:
-            print("[ERREUR HEATMAP] Pas assez de points valides (réels + bords) pour l'interpolation.")
-            ax.set_title("Pas assez de données pour la heatmap")
-            ax.set_xlabel("X (mm)")
-            ax.set_ylabel("Y (mm)")
-            # Afficher les points originaux s'il y en a
-            if x_orig:
-                ax.scatter(x_orig, y_orig, color='black', marker='o', s=25)
-            return # Quitter la fonction si pas assez de points
+            print("[ERREUR HEATMAP] Pas assez de points pour l'interpolation.")
+            # Afficher un message sur les deux axes
+            ax1.set_title("Pas assez de données")
+            ax2.set_title("Pas assez de données")
+            if x_orig: # Afficher les points si possible
+                ax1.scatter(x_orig, y_orig, color='black', marker='o', s=25)
+                ax2.scatter(x_orig, y_orig, color='black', marker='o', s=25)
+            return
 
-        # 8. Créer l'interpolation RBF avec les données combinées
-        # smooth=0.5 est une valeur de départ, tu peux l'ajuster pour plus ou moins de lissage
-        # epsilon pourrait aussi être ajusté selon la fonction RBF choisie
         rbf = Rbf(x_combined, y_combined, t_combined, function='multiquadric', smooth=0.5)
         grid_size = 200
-
-        # 9. Définir la grille et masquer l'extérieur du cercle
-        # Utiliser r_max pour la grille et le masque pour correspondre aux points de bord
         xi, yi = np.meshgrid(
             np.linspace(-r_max, r_max, grid_size),
             np.linspace(-r_max, r_max, grid_size)
         )
+        ti = rbf(xi, yi) # Données interpolées brutes
+        mask = xi**2 + yi**2 > r_max**2
+        ti_masked = np.ma.array(ti, mask=mask) # Données masquées pour affichage original
 
-        ti = rbf(xi, yi)
-        mask = xi**2 + yi**2 > r_max**2 # Masque basé sur le rayon où les points de bord ont été placés
-        ti_masked = np.ma.array(ti, mask=mask)
-            
-        # 13. Afficher la heatmap et les points originaux
-        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma") # levels=100 pour un dégradé lisse
-        fig.colorbar(contour, ax=ax, label="Température (°C)")
-        ax.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances') # Afficher seulement les points réels
-        
-        # 14 Annoter seulement les points réels
+        # --- 5. Calcul spécifique pour la deuxième heatmap : Filtre Gaussien ---
+        sigma_filtre = 2 # Ajustable
+        ti_filtered = gaussian_filter(ti, sigma=sigma_filtre, mode='nearest')
+        ti_filtered_masked = np.ma.array(ti_filtered, mask=mask) # Masquer les données filtrées
+
+        # Trouver le max sur la carte filtrée
+        max_x_gauss, max_y_gauss = None, None
+        point_max_gauss_trouve = False
+        try:
+            max_idx_flat_gauss = np.argmax(ti_filtered_masked)
+            max_idx_2d_gauss = np.unravel_index(max_idx_flat_gauss, ti.shape)
+            max_x_gauss = xi[max_idx_2d_gauss]
+            max_y_gauss = yi[max_idx_2d_gauss]
+            point_max_gauss_trouve = True
+            # print(f"[INFO LASER GAUSS] Pos: ({max_x_gauss:.2f}, {max_y_gauss:.2f})") # Optionnel
+        except (ValueError, IndexError):
+            # print("[AVERTISSEMENT GAUSS] Impossible de trouver le max filtré.") # Optionnel
+            point_max_gauss_trouve = False
+
+
+        # --- 6. Affichage sur le premier axe (ax1) : Original + Barycentre ---
+        contour1 = ax1.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
+        fig.colorbar(contour1, ax=ax1, label="Température (°C)")
+        ax1.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances')
+        # Annotations des points réels sur ax1
         for i in range(len(x_orig)):
-            # Trouver le nom correspondant à x_orig[i], y_orig[i] peut être un peu complexe
-            # On peut le faire en retrouvant l'index original ou en cherchant par position
-            # Ici, on suppose que l'ordre de x_orig correspond à l'ordre des thermistances valides
-            # C'est plus simple si on itère sur les positions originales et on vérifie la validité
+            # ... (logique d'annotation inchangée, mais utiliser ax1.annotate) ...
             original_index_in_positions = -1
             for k in self.indices_à_garder:
                 if self.positions[k][1] == (x_orig[i], y_orig[i]):
@@ -391,30 +389,55 @@ class TraitementDonnees:
                     break
             if original_index_in_positions != -1:
                 name = self.positions[original_index_in_positions][0]
-                ax.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
-        # 15. Si un point maximum a été trouvé, l'afficher sur le graphique en vert
-        if laser_pos_found:
-            # Utiliser un cercle vert ('go') ou une étoile verte ('g*')
-            ax.plot(laser_x, laser_y, 'go', markersize=10, label=f'Laser estimé @ ({laser_x:.1f}, {laser_y:.1f})')
+                ax1.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
 
-        ax.set_aspect('equal')
-        title_str = f"Map de chaleur (Tps: {elapsed_time:.2f} s)"
+        # Afficher le point barycentre (vert) sur ax1
         if laser_pos_found:
-            title_str += f" - Laser @ ({laser_x:.1f}, {laser_y:.1f})"
-        else:
-            title_str += " - Laser ?" # Ou ne rien ajouter si non trouvé
+            ax1.plot(laser_x, laser_y, 'go', markersize=10, label=f'Laser (Bary) @ ({laser_x:.1f}, {laser_y:.1f})')
 
-        ax.set_title(title_str)
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_xlim(-r_max - 1, r_max + 1) # Légère marge pour la visualisation
-        ax.set_ylim(-r_max - 1, r_max + 1)
-        ax.legend() # Décommenter si tu veux une légende pour les points NaN/réels
-        fig.tight_layout()
+        # Configuration ax1
+        ax1.set_aspect('equal')
+        title_ax1 = f"Original + Barycentre (Tps: {elapsed_time:.2f} s)"
+        if laser_pos_found:
+            title_ax1 += f"\nLaser @ ({laser_x:.1f}, {laser_y:.1f})"
+        ax1.set_title(title_ax1, fontsize=10)
+        ax1.set_xlabel("X (mm)")
+        ax1.set_ylabel("Y (mm)")
+        ax1.set_xlim(-r_max - 1, r_max + 1)
+        ax1.set_ylim(-r_max - 1, r_max + 1)
+        ax1.legend(fontsize=8)
+
+
+        # --- 7. Affichage sur le deuxième axe (ax2) : Filtré + Max Gaussien ---
+        contour2 = ax2.contourf(xi, yi, ti_filtered_masked, levels=100, cmap="plasma") # Utilise les données filtrées
+        fig.colorbar(contour2, ax=ax2, label="Température Filtrée (°C)")
+        # Optionnel: afficher aussi les points originaux sur ax2
+        # ax2.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances')
+
+        # Afficher le point max gaussien (étoile rouge) sur ax2
+        if point_max_gauss_trouve:
+            ax2.plot(max_x_gauss, max_y_gauss, 'r*', markersize=12, label=f'Max (Gauss) @ ({max_x_gauss:.1f}, {max_y_gauss:.1f})')
+
+        # Configuration ax2
+        ax2.set_aspect('equal')
+        title_ax2 = f"Filtre Gaussien (σ={sigma_filtre}) (Tps: {elapsed_time:.2f} s)"
+        if point_max_gauss_trouve:
+            title_ax2 += f"\nMax @ ({max_x_gauss:.1f}, {max_y_gauss:.1f})"
+        ax2.set_title(title_ax2, fontsize=10)
+        ax2.set_xlabel("X (mm)")
+        ax2.set_ylabel("Y (mm)") # Ou laisser vide si évident
+        ax2.set_xlim(-r_max - 1, r_max + 1)
+        ax2.set_ylim(-r_max - 1, r_max + 1)
+        ax2.legend(fontsize=8)
+
+        # --- Finalisation ---
+        fig.tight_layout() 
 
 # --- Assure-toi que le reste de ta classe et l'appel à cette fonction restent corrects ---
 
 
+
+    # Dans la classe TraitementDonnees (fichier Test.py)
 
     def demarrer_acquisition_live(self, interval=0.2):
         if not self.est_connecte() and not self.simulation:
@@ -422,12 +445,21 @@ class TraitementDonnees:
             return
 
         print("🚀 Acquisition live en cours... (Ctrl+C pour arrêter)")
-        fig = plt.figure(figsize=(6, 6))
+        # --- MODIFICATION ICI: Figure plus large ---
+        fig = plt.figure(figsize=(12, 6)) # Augmenter la largeur (ex: 12 pouces)
+        # -----------------------------------------
         plt.ion()
         fig.show()
 
         all_data = []
-        headers = [self.positions[i][0] for i in self.indices_à_garder] + ["T_ref", "timestamp"]
+        # Utiliser les noms de colonnes définis dans __init__ pour le CSV si en mode simulation
+        if self.simulation:
+             # Assure-toi que les headers correspondent bien aux données que tu veux sauvegarder
+             headers = self.simulation_columns + ["T_ref", "timestamp", "temps_ecoule_s"]
+        else:
+             headers = [self.positions[i][0] for i in self.indices_à_garder] + ["T_ref", "timestamp", "temps_ecoule_s"]
+
+
         start_time = time.time()
         try:
             while True:
@@ -436,43 +468,76 @@ class TraitementDonnees:
                 data = self.get_temperatures()
 
                 if data:
-                    os.system("clear")
+                    os.system("clear") # ou 'cls' sur Windows
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
                     print("Températures mesurées")
                     print("-" * 60)
+                    valid_temps_count = 0
                     for name, temp in data.items():
-                        print(f"{name:<6} : {temp:6.2f} °C")
+                        if pd.notna(temp):
+                             print(f"{name:<6} : {temp:6.2f} °C")
+                             valid_temps_count += 1
+                        else:
+                             print(f"{name:<6} :   --   °C (NaN)")
+                    print(f"({valid_temps_count}/{len(self.indices_à_garder)} thermistances valides)")
                     print("=" * 60)
 
+                    # L'appel reste le même, la fonction interne gère les 2 plots
                     self.afficher_heatmap_dans_figure(data, fig, elapsed_time)
                     fig.canvas.draw()
                     fig.canvas.flush_events()
 
-                    ligne = [data[name] for name in data]
-                    ligne.append(25.0)
-                    ligne.append(datetime.now().isoformat(timespec='seconds'))
+                    # Préparer la ligne pour le CSV
+                    ligne = []
+                    for header_name in headers:
+                        if header_name == "T_ref":
+                            ligne.append(25.0) # Valeur T_ref fixe
+                        elif header_name == "timestamp":
+                            ligne.append(datetime.now().isoformat(timespec='seconds'))
+                        elif header_name == "temps_ecoule_s":
+                            ligne.append(round(elapsed_time, 3))
+                        elif header_name in data:
+                            temp_value = data[header_name]
+                            ligne.append(temp_value if pd.notna(temp_value) else '') # NaN -> ''
+                        else:
+                            # Gérer le cas où un header n'est pas dans les données (devrait moins arriver maintenant)
+                            ligne.append('')
                     all_data.append(ligne)
 
+
                 else:
+                    # Affichage si données incomplètes
+                    os.system("clear") # ou 'cls' sur Windows
+                    print("=" * 60)
+                    print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
+                    print("-" * 60)
                     print("⚠️ Données incomplètes ou non reçues.")
+                    print("=" * 60)
+
 
                 time.sleep(interval)
 
         except KeyboardInterrupt:
             print("\n🛑 Acquisition stoppée. Sauvegarde du fichier CSV...")
-
+            # ... (code de sauvegarde CSV inchangé) ...
             desktop_path = Path.home() / "Desktop"
             filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             csv_path = desktop_path / filename
 
-            with open(csv_path, mode='w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(all_data)
+            try:
+                with open(csv_path, mode='w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(headers) # Utiliser les headers définis au début
+                    writer.writerows(all_data)
+                print(f"✅ Données sauvegardées dans : {csv_path}")
+            except Exception as e:
+                print(f"❌ Erreur lors de la sauvegarde du CSV : {e}")
 
-            print(f"✅ Données sauvegardées dans : {csv_path}")
+
+# --- Le reste du fichier reste inchangé ---
+
 
 
 if __name__ == "__main__":
