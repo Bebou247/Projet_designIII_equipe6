@@ -9,6 +9,7 @@ import csv
 from datetime import datetime
 import pandas as pd
 from pathlib import Path
+from scipy.ndimage import gaussian_filter
 
 class TraitementDonnees:
     VREF = 3.003
@@ -43,7 +44,7 @@ class TraitementDonnees:
                 # Chemin vers le fichier CSV relatif au script Test.py
                 script_dir = Path(__file__).parent
                 # Te permet de choisir quel fichier prendre
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 1.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 6.csv"
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
                 self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -341,13 +342,37 @@ class TraitementDonnees:
         ti = rbf(xi, yi)
         mask = xi**2 + yi**2 > r_max**2 # Masque basé sur le rayon où les points de bord ont été placés
         ti_masked = np.ma.array(ti, mask=mask)
+            # 8. Appliquer un filtre Gaussien aux données interpolées (non masquées)
+        #    Le paramètre sigma contrôle le lissage. Ajuste-le si nécessaire (ex: 1, 2, 3...).
+        #    mode='nearest' gère les bords de manière raisonnable.
+        sigma_filtre = 2 # A ajuster selon le niveau de lissage souhaité
+        ti_filtered = gaussian_filter(ti, sigma=sigma_filtre, mode='nearest')
 
-        # 8. Afficher la heatmap et les points originaux
+        # 9. Appliquer le masque aux données filtrées pour chercher le max DANS le cercle
+        ti_filtered_masked = np.ma.array(ti_filtered, mask=mask)
+
+        # 10. Trouver l'index du maximum dans la grille filtrée et masquée
+        try:
+            # argmax sur l'array masqué retourne l'index plat du max non masqué
+            max_idx_flat = np.argmax(ti_filtered_masked)
+            # Convertir l'index plat en indices 2D
+            max_idx_2d = np.unravel_index(max_idx_flat, ti.shape)
+            # Récupérer les coordonnées (x, y) correspondantes depuis la grille
+            max_x = xi[max_idx_2d]
+            max_y = yi[max_idx_2d]
+            max_temp_val = ti_filtered_masked[max_idx_2d] # Température max (lissée)
+            point_max_trouve = True
+            print(f"[INFO LASER] Point max détecté (après filtre) à ({max_x:.2f}, {max_y:.2f}) avec T={max_temp_val:.2f}°C")
+        except (ValueError, IndexError):
+            # Gérer le cas où toutes les valeurs sont masquées ou autres erreurs
+            print("[AVERTISSEMENT] Impossible de trouver le point maximum sur la grille filtrée.")
+            point_max_trouve = False
+        # 11. Afficher la heatmap et les points originaux
         contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma") # levels=100 pour un dégradé lisse
         fig.colorbar(contour, ax=ax, label="Température (°C)")
         ax.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances') # Afficher seulement les points réels
-
-        # Annoter seulement les points réels
+        
+        # 12 Annoter seulement les points réels
         for i in range(len(x_orig)):
             # Trouver le nom correspondant à x_orig[i], y_orig[i] peut être un peu complexe
             # On peut le faire en retrouvant l'index original ou en cherchant par position
@@ -361,7 +386,10 @@ class TraitementDonnees:
             if original_index_in_positions != -1:
                 name = self.positions[original_index_in_positions][0]
                 ax.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
-
+        # 13. Si un point maximum a été trouvé, l'afficher sur le graphique en vert
+        if point_max_trouve:
+            # Utiliser un cercle vert ('go') ou une étoile verte ('g*')
+            ax.plot(max_x, max_y, 'go', markersize=10, label=f'Laser estimé @ ({max_x:.1f}, {max_y:.1f})')
 
         ax.set_aspect('equal')
         ax.set_title("Map de chaleur des températures (Bords ajustés)")
