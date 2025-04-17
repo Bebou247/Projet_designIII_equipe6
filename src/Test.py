@@ -41,14 +41,9 @@ class TraitementDonnees:
             print("[SIMULATION] Mode simulation activé.")
             try:
                 # Chemin vers le fichier CSV relatif au script Test.py
-                # Ajustez si votre structure de dossiers est différente
                 script_dir = Path(__file__).parent
-                # On suppose que 'data' est au même niveau que le dossier parent de 'src'
-                # Ex: Projet/data et Projet/src/Test.py -> ../data/Hauteur 1.csv
+                # Te permet de choisir quel fichier prendre
                 simulation_file_path = script_dir.parent / "data" / "Hauteur 5.csv"
-                # Si 'data' est dans 'src': simulation_file_path = script_dir / "data" / "Hauteur 1.csv"
-                # Si 'data' est au même niveau que 'src': simulation_file_path = script_dir.parent / "data" / "Hauteur 1.csv"
-
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
                 self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -62,8 +57,6 @@ class TraitementDonnees:
                     # Conversion des colonnes requises en numérique, gère les erreurs
                     for col in self.simulation_columns:
                         self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
-                    # Optionnel: supprimer les lignes avec des NaN dans les colonnes critiques
-                    # self.simulation_data.dropna(subset=self.simulation_columns, inplace=True)
                     print(f"[SIMULATION] Fichier CSV chargé. {len(self.simulation_data)} lignes trouvées.")
                     if self.simulation_data.isnull().values.any():
                         print("[AVERTISSEMENT SIMULATION] Le fichier CSV contient des valeurs non numériques après conversion.")
@@ -83,8 +76,6 @@ class TraitementDonnees:
             except Exception as e:
                 print(f"[ERREUR] Impossible d'ouvrir le port série : {e}")
                 self.ser = None
-
-    # ... (gardez les autres méthodes comme est_connecte, steinhart_hart_temperature, etc.)
 
     def est_connecte(self):
         return self.ser is not None
