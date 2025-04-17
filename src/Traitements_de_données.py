@@ -152,7 +152,7 @@ class TraitementDonnees:
             print("Pas assez de données pour générer la heatmap.")
             return
 
-        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.1, epsilon=0.1)
+        rbf = Rbf(x, y, t, function='gaussian', smooth=0.1, epsilon=0.1)
         grid_size = 300
         r_max = 12.25
         xi, yi = np.meshgrid(
