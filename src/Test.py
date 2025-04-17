@@ -268,7 +268,7 @@ class TraitementDonnees:
 
     # Dans la classe TraitementDonnees (fichier Test.py)
 
-    def afficher_heatmap_dans_figure(self, temperature_dict, fig):
+    def afficher_heatmap_dans_figure(self, temperature_dict, fig, elapsed_time):
         fig.clear()
         ax = fig.add_subplot(111)
 
@@ -297,7 +297,7 @@ class TraitementDonnees:
             # return
         else:
             avg_temp = np.mean(valid_temps_list)
-            target_edge_temp = avg_temp - 2.0
+            target_edge_temp = avg_temp - 1.0
             print(f"[INFO HEATMAP] Température moyenne: {avg_temp:.2f}°C, Température des bords: {target_edge_temp:.2f}°C")
 
 
@@ -392,7 +392,7 @@ class TraitementDonnees:
             ax.plot(max_x, max_y, 'go', markersize=10, label=f'Laser estimé @ ({max_x:.1f}, {max_y:.1f})')
 
         ax.set_aspect('equal')
-        ax.set_title("Map de chaleur des températures (Bords ajustés)")
+        ax.set_title(f"Map de chaleur (Tps: {elapsed_time:.2f} s) - Bords ajustés")
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
         ax.set_xlim(-r_max - 1, r_max + 1) # Légère marge pour la visualisation
@@ -416,21 +416,25 @@ class TraitementDonnees:
 
         all_data = []
         headers = [self.positions[i][0] for i in self.indices_à_garder] + ["T_ref", "timestamp"]
-
+        start_time = time.time()
         try:
             while True:
+                current_time = time.time()
+                elapsed_time = current_time - start_time
                 data = self.get_temperatures()
 
                 if data:
                     os.system("clear")
                     print("=" * 60)
+                    print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
+                    print("-" * 60)
                     print("Températures mesurées")
                     print("-" * 60)
                     for name, temp in data.items():
                         print(f"{name:<6} : {temp:6.2f} °C")
                     print("=" * 60)
 
-                    self.afficher_heatmap_dans_figure(data, fig)
+                    self.afficher_heatmap_dans_figure(data, fig, elapsed_time)
                     fig.canvas.draw()
                     fig.canvas.flush_events()
 
