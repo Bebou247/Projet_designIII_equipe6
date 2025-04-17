@@ -32,8 +32,7 @@ class TraitementDonnees:
         # Canaux 0 à 20 utilisés pour les thermistances R1-R11, R13-R21, R24(sur canal 11)
         self.indices_à_garder = list(range(21))
         self.simulation_data = None
-        self.simulation_row = 0   # Permet de choisir à quel temps tu veux commencer
-        self.simulation_index = 0
+        self.simulation_index = 0  # Te permet de décider à quel rang tu commences
         # Noms des colonnes attendues dans le CSV (basés sur self.positions et self.indices_à_garder)
         self.simulation_columns = [self.positions[i][0] for i in self.indices_à_garder]
 
@@ -46,7 +45,7 @@ class TraitementDonnees:
                 script_dir = Path(__file__).parent
                 # On suppose que 'data' est au même niveau que le dossier parent de 'src'
                 # Ex: Projet/data et Projet/src/Test.py -> ../data/Hauteur 1.csv
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 4.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 5.csv"
                 # Si 'data' est dans 'src': simulation_file_path = script_dir / "data" / "Hauteur 1.csv"
                 # Si 'data' est au même niveau que 'src': simulation_file_path = script_dir.parent / "data" / "Hauteur 1.csv"
 
