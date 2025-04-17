@@ -291,30 +291,60 @@ class TraitementDonnees:
         if not valid_temps_list:
             print("[AVERTISSEMENT] Aucune donnée de température valide pour calculer la moyenne des bords.")
             # Comportement par défaut : utiliser une température fixe ou ne pas ajouter de bords
-            target_edge_temp = 20.0 # Exemple: température par défaut pour les bords
+            baseline_temp = 20.0 # Exemple: température par défaut pour les bords
             # Ou tu pourrais choisir de ne pas ajouter de points de bord et retourner
             # ax.set_title("Données invalides pour la heatmap")
             # return
         else:
             avg_temp = np.mean(valid_temps_list)
-            target_edge_temp = avg_temp - 1.0
-            print(f"[INFO HEATMAP] Température moyenne: {avg_temp:.2f}°C, Température des bords: {target_edge_temp:.2f}°C")
+            baseline_temp = avg_temp - 1.0
+            print(f"[INFO HEATMAP] Température moyenne: {avg_temp:.2f}°C, Température des bords: {baseline_temp:.2f}°C")
+            can_calculate_laser_pos = True
+            
+        laser_x, laser_y = None, None
+        laser_pos_found = False
+        if can_calculate_laser_pos and len(x_orig) > 0: # Besoin d'au moins un point valide
+            total_weight = 0.0
+            weighted_x_sum = 0.0
+            weighted_y_sum = 0.0
+                # 3. Calculer les poids et les sommes pondérées
+            for i in range(len(x_orig)):
+                # Le poids est l'augmentation de température au carré (donne plus d'importance aux points chauds)
+                # On ignore les points dont la température est inférieure ou égale à la référence
+                delta_temp = t_orig[i] - baseline_temp
+                weight = max(0, delta_temp)**2 # Utilise max(0, delta_temp) si tu ne veux pas le carré
 
+                if weight > 1e-6: # Ignorer les poids négligeables
+                    weighted_x_sum += weight * x_orig[i]
+                    weighted_y_sum += weight * y_orig[i]
+                    total_weight += weight
 
-        # 3. Définir les points virtuels sur le périmètre
+            # 4. Calculer la position du barycentre si le poids total est suffisant
+            if total_weight > 1e-6:
+                laser_x = weighted_x_sum / total_weight
+                laser_y = weighted_y_sum / total_weight
+                laser_pos_found = True
+                print(f"[INFO LASER] Position estimée (barycentre): ({laser_x:.2f}, {laser_y:.2f})")
+            else:
+                print("[AVERTISSEMENT] Poids total insuffisant pour calculer la position du laser (pas de points significativement chauds?).")
+                laser_pos_found = False
+        else:
+            print("[AVERTISSEMENT] Pas assez de données valides pour tenter le calcul de la position laser.")
+        # --- FIN DE LA NOUVELLE PARTIE ---
+        # 5. Définir les points virtuels sur le périmètre
         r_max = 12.5 # Le rayon de ta carte thermique
         num_edge_points = 12 # Plus de points pour une meilleure contrainte (ajustable)
         edge_angles = np.linspace(0, 2 * np.pi, num_edge_points, endpoint=False)
         edge_x = r_max * np.cos(edge_angles)
         edge_y = r_max * np.sin(edge_angles)
-        edge_t = [target_edge_temp] * num_edge_points # Tous les points de bord ont la température cible
+        edge_t = [baseline_temp] * num_edge_points # Tous les points de bord ont la température cible
 
-        # 4. Combiner les points réels et les points de bord
+        # 6. Combiner les points réels et les points de bord
         x_combined = x_orig + list(edge_x)
         y_combined = y_orig + list(edge_y)
         t_combined = t_orig + edge_t
 
-        # 5. Vérifier s'il y a assez de points pour l'interpolation
+        # 7. Vérifier s'il y a assez de points pour l'interpolation
         # Rbf a besoin d'au moins N+1 points en N dimensions (ici 2D, donc au moins 3 points)
         if len(x_combined) < 3:
             print("[ERREUR HEATMAP] Pas assez de points valides (réels + bords) pour l'interpolation.")
@@ -326,13 +356,13 @@ class TraitementDonnees:
                 ax.scatter(x_orig, y_orig, color='black', marker='o', s=25)
             return # Quitter la fonction si pas assez de points
 
-        # 6. Créer l'interpolation RBF avec les données combinées
+        # 8. Créer l'interpolation RBF avec les données combinées
         # smooth=0.5 est une valeur de départ, tu peux l'ajuster pour plus ou moins de lissage
         # epsilon pourrait aussi être ajusté selon la fonction RBF choisie
         rbf = Rbf(x_combined, y_combined, t_combined, function='multiquadric', smooth=0.5)
         grid_size = 200
 
-        # 7. Définir la grille et masquer l'extérieur du cercle
+        # 9. Définir la grille et masquer l'extérieur du cercle
         # Utiliser r_max pour la grille et le masque pour correspondre aux points de bord
         xi, yi = np.meshgrid(
             np.linspace(-r_max, r_max, grid_size),
@@ -342,37 +372,13 @@ class TraitementDonnees:
         ti = rbf(xi, yi)
         mask = xi**2 + yi**2 > r_max**2 # Masque basé sur le rayon où les points de bord ont été placés
         ti_masked = np.ma.array(ti, mask=mask)
-            # 8. Appliquer un filtre Gaussien aux données interpolées (non masquées)
-        #    Le paramètre sigma contrôle le lissage. Ajuste-le si nécessaire (ex: 1, 2, 3...).
-        #    mode='nearest' gère les bords de manière raisonnable.
-        sigma_filtre = 2 # A ajuster selon le niveau de lissage souhaité
-        ti_filtered = gaussian_filter(ti, sigma=sigma_filtre, mode='nearest')
-
-        # 9. Appliquer le masque aux données filtrées pour chercher le max DANS le cercle
-        ti_filtered_masked = np.ma.array(ti_filtered, mask=mask)
-
-        # 10. Trouver l'index du maximum dans la grille filtrée et masquée
-        try:
-            # argmax sur l'array masqué retourne l'index plat du max non masqué
-            max_idx_flat = np.argmax(ti_filtered_masked)
-            # Convertir l'index plat en indices 2D
-            max_idx_2d = np.unravel_index(max_idx_flat, ti.shape)
-            # Récupérer les coordonnées (x, y) correspondantes depuis la grille
-            max_x = xi[max_idx_2d]
-            max_y = yi[max_idx_2d]
-            max_temp_val = ti_filtered_masked[max_idx_2d] # Température max (lissée)
-            point_max_trouve = True
-            print(f"[INFO LASER] Point max détecté (après filtre) à ({max_x:.2f}, {max_y:.2f}) avec T={max_temp_val:.2f}°C")
-        except (ValueError, IndexError):
-            # Gérer le cas où toutes les valeurs sont masquées ou autres erreurs
-            print("[AVERTISSEMENT] Impossible de trouver le point maximum sur la grille filtrée.")
-            point_max_trouve = False
-        # 11. Afficher la heatmap et les points originaux
+            
+        # 13. Afficher la heatmap et les points originaux
         contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma") # levels=100 pour un dégradé lisse
         fig.colorbar(contour, ax=ax, label="Température (°C)")
         ax.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances') # Afficher seulement les points réels
         
-        # 12 Annoter seulement les points réels
+        # 14 Annoter seulement les points réels
         for i in range(len(x_orig)):
             # Trouver le nom correspondant à x_orig[i], y_orig[i] peut être un peu complexe
             # On peut le faire en retrouvant l'index original ou en cherchant par position
@@ -386,18 +392,24 @@ class TraitementDonnees:
             if original_index_in_positions != -1:
                 name = self.positions[original_index_in_positions][0]
                 ax.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
-        # 13. Si un point maximum a été trouvé, l'afficher sur le graphique en vert
-        if point_max_trouve:
+        # 15. Si un point maximum a été trouvé, l'afficher sur le graphique en vert
+        if laser_pos_found:
             # Utiliser un cercle vert ('go') ou une étoile verte ('g*')
-            ax.plot(max_x, max_y, 'go', markersize=10, label=f'Laser estimé @ ({max_x:.1f}, {max_y:.1f})')
+            ax.plot(laser_x, laser_y, 'go', markersize=10, label=f'Laser estimé @ ({laser_x:.1f}, {laser_y:.1f})')
 
         ax.set_aspect('equal')
-        ax.set_title(f"Map de chaleur (Tps: {elapsed_time:.2f} s) - Bords ajustés")
+        title_str = f"Map de chaleur (Tps: {elapsed_time:.2f} s)"
+        if laser_pos_found:
+            title_str += f" - Laser @ ({laser_x:.1f}, {laser_y:.1f})"
+        else:
+            title_str += " - Laser ?" # Ou ne rien ajouter si non trouvé
+
+        ax.set_title(title_str)
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
         ax.set_xlim(-r_max - 1, r_max + 1) # Légère marge pour la visualisation
         ax.set_ylim(-r_max - 1, r_max + 1)
-        # ax.legend() # Décommenter si tu veux une légende pour les points NaN/réels
+        ax.legend() # Décommenter si tu veux une légende pour les points NaN/réels
         fig.tight_layout()
 
 # --- Assure-toi que le reste de ta classe et l'appel à cette fonction restent corrects ---
