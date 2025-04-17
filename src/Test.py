@@ -1,16 +1,18 @@
 import serial
 import numpy as np
-from scipy.interpolate import Rbf
-import re
-import time
+import pandas as pd
 import matplotlib.pyplot as plt
-import os
-import csv
 from datetime import datetime
 from pathlib import Path
+from scipy.interpolate import Rbf
+from scipy.ndimage import gaussian_filter
+import re
+import time
+import os
+import csv
 
 class TraitementDonnees:
-    VREF = 3.02
+    VREF = 3.003
     R_FIXED = 4700
 
     def __init__(self, port="/dev/cu.usbmodem14201", coeffs_path="data/raw/coefficients.npy", simulation=False):
@@ -18,7 +20,6 @@ class TraitementDonnees:
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
 
-        # 🔁 R24 à l’ancienne position de R24 (canal 11), R12 supprimée
         self.positions = [
             ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
             ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
@@ -27,17 +28,36 @@ class TraitementDonnees:
             ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
             ("R21", (4.5, -8))
         ]
-        self.indices_à_garder = list(range(21))  # Canaux 0 à 20
+        self.indices_à_garder = list(range(21))
+        self.simulation_data = None
+        self.simulation_index = 0
+        self.simulation_columns = [self.positions[i][0] for i in self.indices_à_garder]
 
         if self.simulation:
             self.ser = None
-            print("[SIMULATION] Aucune connexion série établie.")
+            print("[SIMULATION] Mode simulation activé.")
+            try:
+                simulation_file_path = Path(__file__).parent.parent / "data" / "Hauteur 7.csv"
+                self.simulation_data = pd.read_csv(simulation_file_path)
+                print(f"[SIMULATION] Chargement : {simulation_file_path.resolve()}")
+
+                missing = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
+                if missing:
+                    print(f"[ERREUR] Colonnes manquantes : {missing}")
+                    self.simulation_data = None
+                else:
+                    for col in self.simulation_columns:
+                        self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
+                    print(f"[SIMULATION] {len(self.simulation_data)} lignes chargées.")
+            except Exception as e:
+                print(f"[ERREUR] Chargement simulation : {e}")
+                self.simulation_data = None
         else:
             try:
                 self.ser = serial.Serial(self.port, 9600, timeout=1)
-                print(f"[INFO] Port série connecté sur {self.port}")
+                print(f"[INFO] Port série connecté : {self.port}")
             except Exception as e:
-                print(f"[ERREUR] Impossible d'ouvrir le port série : {e}")
+                print(f"[ERREUR] Connexion série : {e}")
                 self.ser = None
 
     def est_connecte(self):
@@ -51,162 +71,130 @@ class TraitementDonnees:
             return float('inf')
         return self.R_FIXED * (voltage / (self.VREF - voltage))
 
-    def compute_temperature(self, resistance, coeffs):
+    def compute_temperature(self, R, coeffs):
         A, B, C = coeffs
-        kelvin = self.steinhart_hart_temperature(resistance, A, B, C)
-        return kelvin - 273.15
-
-    def lire_donnees(self):
-        if self.simulation:
-            return {i: np.random.uniform(0.4, 2.6) for i in self.indices_à_garder}
-
-        if self.ser is None:
-            return None
-
-        self.ser.reset_input_buffer()
-        voltages_dict = {}
-        start_time = time.time()
-        timeout_sec = 2
-
-        while True:
-            if time.time() - start_time > timeout_sec:
-                print("⚠️ Temps de lecture dépassé, données incomplètes.")
-                return None
-
-            try:
-                line = self.ser.readline().decode(errors='ignore').strip()
-            except Exception as e:
-                continue
-
-            if not line:
-                continue
-
-            if "Fin du balayage" in line:
-                break
-
-            match = re.search(r"Canal (\d+): ([\d.]+) V", line)
-            if match:
-                canal = int(match.group(1))
-                if canal in self.indices_à_garder:
-                    voltages_dict[canal] = float(match.group(2))
-
-        if len(voltages_dict) != len(self.indices_à_garder):
-            print(f"⚠️ Seulement {len(voltages_dict)}/{len(self.indices_à_garder)} canaux reçus.")
-            return None
-
-        return voltages_dict
+        return self.steinhart_hart_temperature(R, A, B, C) - 273.15
 
     def get_temperatures(self):
-        data = self.lire_donnees()
-        if data is None:
-            return None
+        if self.simulation:
+            if self.simulation_data is not None and not self.simulation_data.empty:
+                if self.simulation_index >= len(self.simulation_data):
+                    self.simulation_index = 0
+                row = self.simulation_data.iloc[self.simulation_index]
+                self.simulation_index += 1
+                temp_dict = {name: row.get(name, np.nan) for name in self.simulation_columns}
+                timestamp = row.get("timestamp", "")
+                return temp_dict, timestamp
+            return None, ""
+        else:
+            return None, ""
 
-        temperatures = []
-        for i in self.indices_à_garder:
-            if i == 11:
-                coeffs = self.coefficients[23]  # 🔁 canal 11 → R24
-            else:
-                coeffs = self.coefficients[i]
-            resistance = self.compute_resistance(data[i])
-            temp = self.compute_temperature(resistance, coeffs)
-            temperatures.append(temp)
-
-        return dict((self.positions[i][0], temp) for i, temp in zip(self.indices_à_garder, temperatures))
-
-    def afficher_heatmap_dans_figure(self, temperature_dict, fig):
+    def afficher_heatmap_dans_figure(self, temperature_dict, fig, index=0, timestamp="", utiliser_bords=True):
         fig.clear()
         ax = fig.add_subplot(111)
 
         x, y, t = [], [], []
         for i in self.indices_à_garder:
-            name, pos = self.positions[i]
-            x.append(pos[0])
-            y.append(pos[1])
-            t.append(temperature_dict[name])
+            name, (xi, yi) = self.positions[i]
+            temp = temperature_dict.get(name, np.nan)
+            if pd.notna(temp):
+                x.append(xi)
+                y.append(yi)
+                t.append(temp)
 
-        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.5)
-        grid_size = 200
+        if len(x) < 3:
+            print("[SKIP] Trop peu de données valides.")
+            return
+
         r_max = 12.5
 
-        xi, yi = np.meshgrid(
-            np.linspace(-r_max, r_max, grid_size),
-            np.linspace(-r_max, r_max, grid_size)
-        )
+        if utiliser_bords:
+            edge_angles = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+            edge_x = r_max * np.cos(edge_angles)
+            edge_y = r_max * np.sin(edge_angles)
+            edge_t = [np.mean(t) - 2.0] * len(edge_x)
 
+            x_all = x + list(edge_x)
+            y_all = y + list(edge_y)
+            t_all = t + edge_t
+        else:
+            x_all = x
+            y_all = y
+            t_all = t
+
+        rbf = Rbf(x_all, y_all, t_all, function='multiquadric', smooth=1.0, epsilon=1)
+        grid_size = 200
+        xi, yi = np.meshgrid(np.linspace(-r_max, r_max, grid_size),
+                             np.linspace(-r_max, r_max, grid_size))
         ti = rbf(xi, yi)
+        ti_filtered = gaussian_filter(ti, sigma=2)
         mask = xi**2 + yi**2 > r_max**2
-        ti_masked = np.ma.array(ti, mask=mask)
+        ti_masked = np.ma.array(ti_filtered, mask=mask)
 
-        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
+        max_idx = np.unravel_index(np.argmax(ti_masked), ti_masked.shape)
+        x_laser, y_laser = xi[max_idx], yi[max_idx]
+        temp_peak = ti_masked[max_idx]
+
+        contour = ax.contourf(xi, yi, ti_masked, levels=200, cmap="plasma")
         fig.colorbar(contour, ax=ax, label="Température (°C)")
-        ax.scatter(x, y, color='black', marker='o', s=25)
-        for i, name in enumerate([self.positions[i][0] for i in self.indices_à_garder]):
-            ax.annotate(name, (x[i], y[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
 
+        ax.scatter(x, y, color='black', s=25)
+        ax.scatter(x_laser, y_laser, color='red', marker='x', s=80)
+        ax.annotate(f"x={x_laser:.1f}, y={y_laser:.1f}",
+                    (x_laser, y_laser),
+                    textcoords="offset points",
+                    xytext=(10, 10),
+                    fontsize=9,
+                    color='white',
+                    bbox=dict(boxstyle="round,pad=0.3", fc="black", alpha=0.7))
+
+        for xi_, yi_, nom in zip(x, y, temperature_dict.keys()):
+            ax.annotate(nom, (xi_, yi_), textcoords="offset points", xytext=(4, 4),
+                        ha='left', fontsize=8, color='white')
+
+        ax.set_title(f"Frame {index} | t = {timestamp} | Laser = {temp_peak:.1f}°C")
         ax.set_aspect('equal')
-        ax.set_title("Map de chaleur des températures (R1 à R21)")
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
         ax.set_xlim(-r_max, r_max)
         ax.set_ylim(-r_max, r_max)
         fig.tight_layout()
+        plt.pause(0.001)
 
-    def demarrer_acquisition_live(self, interval=0.2):
-        if not self.est_connecte() and not self.simulation:
-            print("Arduino non connecté.")
+    def demarrer_acquisition_live(self, interval=1.0, real_interval_csv=0.05, utiliser_bords=False):
+        if not self.simulation and not self.est_connecte():
+            print("[ERREUR] Aucun Arduino connecté.")
             return
 
-        print("🚀 Acquisition live en cours... (Ctrl+C pour arrêter)")
+        if self.simulation and self.simulation_data is None:
+            print("[ERREUR] Aucun fichier de simulation chargé. Vérifie le nom du fichier CSV.")
+            return
+
         fig = plt.figure(figsize=(6, 6))
         plt.ion()
         fig.show()
 
-        all_data = []
-        headers = [self.positions[i][0] for i in self.indices_à_garder] + ["T_ref", "timestamp"]
-
         try:
+            frame_index = 0
+            skip_n = int(interval / real_interval_csv)
+
             while True:
-                data = self.get_temperatures()
+                self.simulation_index += skip_n
+                if self.simulation_index >= len(self.simulation_data):
+                    print("✅ Fin du fichier CSV atteinte.")
+                    break
 
+                data, timestamp = self.get_temperatures()
                 if data:
-                    os.system("clear")
-                    print("=" * 60)
-                    print("Températures mesurées")
-                    print("-" * 60)
-                    for name, temp in data.items():
-                        print(f"{name:<6} : {temp:6.2f} °C")
-                    print("=" * 60)
-
-                    self.afficher_heatmap_dans_figure(data, fig)
+                    self.afficher_heatmap_dans_figure(data, fig, index=frame_index, timestamp=timestamp, utiliser_bords=utiliser_bords)
                     fig.canvas.draw()
                     fig.canvas.flush_events()
-
-                    ligne = [data[name] for name in data]
-                    ligne.append(25.0)
-                    ligne.append(datetime.now().isoformat(timespec='seconds'))
-                    all_data.append(ligne)
-
+                    frame_index += 1
                 else:
-                    print("⚠️ Données incomplètes ou non reçues.")
-
-                time.sleep(interval)
+                    print("[WARN] Données invalides")
 
         except KeyboardInterrupt:
-            print("\n🛑 Acquisition stoppée. Sauvegarde du fichier CSV...")
-
-            desktop_path = Path.home() / "Desktop"
-            filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            csv_path = desktop_path / filename
-
-            with open(csv_path, mode='w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(all_data)
-
-            print(f"✅ Données sauvegardées dans : {csv_path}")
-
+            print("\n🛑 Simulation interrompue.")
+            plt.close()
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=False)
-    td.demarrer_acquisition_live(interval=0.05)
-
+    td = TraitementDonnees(simulation=True)
+    td.demarrer_acquisition_live(real_interval_csv=0.1, utiliser_bords=True)

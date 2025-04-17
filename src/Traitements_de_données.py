@@ -164,7 +164,7 @@ class TraitementDonnees:
         mask = xi**2 + yi**2 > (r_max**2)
         ti_masked = np.ma.array(ti, mask=mask)
         contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
-        fig.colorbar(contour, ax=ax, label="Température (°C")
+        fig.colorbar(contour, ax=ax, label="Température °C")
         ax.scatter(x, y, color='black', marker='o', s=25)
         for i, nom in enumerate(x):
             ax.annotate(list(temperature_dict.keys())[i], (x[i], y[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
@@ -182,7 +182,7 @@ class TraitementDonnees:
             print("Arduino non connecté.")
             return
 
-        print("🚀 Acquisition live en cours... (Ctrl+C pour arrêter)")
+        print("Acquisition live en cours... (Ctrl+C pour arrêter)")
         plt.ion()
         fig = None
         if not self.mode_rapide:
