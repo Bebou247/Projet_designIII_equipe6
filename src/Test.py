@@ -43,7 +43,7 @@ class TraitementDonnees:
                 # Chemin vers le fichier CSV relatif au script Test.py
                 script_dir = Path(__file__).parent
                 # Te permet de choisir quel fichier prendre
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 5.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 1.csv"
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
                 self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -265,43 +265,116 @@ class TraitementDonnees:
 
 
 
+    # Dans la classe TraitementDonnees (fichier Test.py)
+
     def afficher_heatmap_dans_figure(self, temperature_dict, fig):
         fig.clear()
         ax = fig.add_subplot(111)
 
-        x, y, t = [], [], []
+        x_orig, y_orig, t_orig = [], [], []
+        valid_temps_list = [] # Pour calculer la moyenne
+
+        # 1. Extraire les données valides des thermistances réelles
         for i in self.indices_à_garder:
             name, pos = self.positions[i]
-            x.append(pos[0])
-            y.append(pos[1])
-            t.append(temperature_dict[name])
+            temp_val = temperature_dict.get(name, np.nan) # Utiliser .get pour plus de sûreté
+            if pd.notna(temp_val): # Ignorer les NaN pour l'interpolation et la moyenne
+                x_orig.append(pos[0])
+                y_orig.append(pos[1])
+                t_orig.append(temp_val)
+                valid_temps_list.append(temp_val)
+            # else: # Optionnel: si tu veux afficher les points NaN différemment
+            #     ax.scatter(pos[0], pos[1], color='gray', marker='x', s=30, label='NaN' if name == self.positions[self.indices_à_garder[0]][0] else "") # Marquer les NaN
 
-        rbf = Rbf(x, y, t, function='multiquadric', smooth=0.5)
+        # 2. Calculer la température cible pour les bords
+        if not valid_temps_list:
+            print("[AVERTISSEMENT] Aucune donnée de température valide pour calculer la moyenne des bords.")
+            # Comportement par défaut : utiliser une température fixe ou ne pas ajouter de bords
+            target_edge_temp = 20.0 # Exemple: température par défaut pour les bords
+            # Ou tu pourrais choisir de ne pas ajouter de points de bord et retourner
+            # ax.set_title("Données invalides pour la heatmap")
+            # return
+        else:
+            avg_temp = np.mean(valid_temps_list)
+            target_edge_temp = avg_temp - 2.0
+            print(f"[INFO HEATMAP] Température moyenne: {avg_temp:.2f}°C, Température des bords: {target_edge_temp:.2f}°C")
+
+
+        # 3. Définir les points virtuels sur le périmètre
+        r_max = 12.5 # Le rayon de ta carte thermique
+        num_edge_points = 12 # Plus de points pour une meilleure contrainte (ajustable)
+        edge_angles = np.linspace(0, 2 * np.pi, num_edge_points, endpoint=False)
+        edge_x = r_max * np.cos(edge_angles)
+        edge_y = r_max * np.sin(edge_angles)
+        edge_t = [target_edge_temp] * num_edge_points # Tous les points de bord ont la température cible
+
+        # 4. Combiner les points réels et les points de bord
+        x_combined = x_orig + list(edge_x)
+        y_combined = y_orig + list(edge_y)
+        t_combined = t_orig + edge_t
+
+        # 5. Vérifier s'il y a assez de points pour l'interpolation
+        # Rbf a besoin d'au moins N+1 points en N dimensions (ici 2D, donc au moins 3 points)
+        if len(x_combined) < 3:
+            print("[ERREUR HEATMAP] Pas assez de points valides (réels + bords) pour l'interpolation.")
+            ax.set_title("Pas assez de données pour la heatmap")
+            ax.set_xlabel("X (mm)")
+            ax.set_ylabel("Y (mm)")
+            # Afficher les points originaux s'il y en a
+            if x_orig:
+                ax.scatter(x_orig, y_orig, color='black', marker='o', s=25)
+            return # Quitter la fonction si pas assez de points
+
+        # 6. Créer l'interpolation RBF avec les données combinées
+        # smooth=0.5 est une valeur de départ, tu peux l'ajuster pour plus ou moins de lissage
+        # epsilon pourrait aussi être ajusté selon la fonction RBF choisie
+        rbf = Rbf(x_combined, y_combined, t_combined, function='multiquadric', smooth=0.5)
         grid_size = 200
-        r_max = 12.5
 
+        # 7. Définir la grille et masquer l'extérieur du cercle
+        # Utiliser r_max pour la grille et le masque pour correspondre aux points de bord
         xi, yi = np.meshgrid(
             np.linspace(-r_max, r_max, grid_size),
             np.linspace(-r_max, r_max, grid_size)
         )
 
         ti = rbf(xi, yi)
-        mask = xi**2 + yi**2 > r_max**2
+        mask = xi**2 + yi**2 > r_max**2 # Masque basé sur le rayon où les points de bord ont été placés
         ti_masked = np.ma.array(ti, mask=mask)
 
-        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
+        # 8. Afficher la heatmap et les points originaux
+        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma") # levels=100 pour un dégradé lisse
         fig.colorbar(contour, ax=ax, label="Température (°C)")
-        ax.scatter(x, y, color='black', marker='o', s=25)
-        for i, name in enumerate([self.positions[i][0] for i in self.indices_à_garder]):
-            ax.annotate(name, (x[i], y[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
+        ax.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances') # Afficher seulement les points réels
+
+        # Annoter seulement les points réels
+        for i in range(len(x_orig)):
+            # Trouver le nom correspondant à x_orig[i], y_orig[i] peut être un peu complexe
+            # On peut le faire en retrouvant l'index original ou en cherchant par position
+            # Ici, on suppose que l'ordre de x_orig correspond à l'ordre des thermistances valides
+            # C'est plus simple si on itère sur les positions originales et on vérifie la validité
+            original_index_in_positions = -1
+            for k in self.indices_à_garder:
+                if self.positions[k][1] == (x_orig[i], y_orig[i]):
+                    original_index_in_positions = k
+                    break
+            if original_index_in_positions != -1:
+                name = self.positions[original_index_in_positions][0]
+                ax.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
+
 
         ax.set_aspect('equal')
-        ax.set_title("Map de chaleur des températures (R1 à R21)")
+        ax.set_title("Map de chaleur des températures (Bords ajustés)")
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
-        ax.set_xlim(-r_max, r_max)
-        ax.set_ylim(-r_max, r_max)
+        ax.set_xlim(-r_max - 1, r_max + 1) # Légère marge pour la visualisation
+        ax.set_ylim(-r_max - 1, r_max + 1)
+        # ax.legend() # Décommenter si tu veux une légende pour les points NaN/réels
         fig.tight_layout()
+
+# --- Assure-toi que le reste de ta classe et l'appel à cette fonction restent corrects ---
+
+
 
     def demarrer_acquisition_live(self, interval=0.2):
         if not self.est_connecte() and not self.simulation:
