@@ -62,7 +62,7 @@ class TraitementDonnees:
     def estimate_laser_power(self, temp_ref, temp_measured, time):
         delta_t = temp_measured - temp_ref
         K = 0.8411
-        tau = 0.9987
+        tau = 0.9987  
         coeff = 0.9999
 
         denominator = K * (1 - np.exp(-time / tau))
@@ -152,7 +152,7 @@ class TraitementDonnees:
             print("Pas assez de données pour générer la heatmap.")
             return
 
-        rbf = Rbf(x, y, t, function='gaussian', smooth=0.1, epsilon=0.1)
+        rbf = Rbf(x, y, t, function='multiquadric', smooth=5, epsilon=0.1)
         grid_size = 300
         r_max = 12.25
         xi, yi = np.meshgrid(
@@ -164,7 +164,7 @@ class TraitementDonnees:
         mask = xi**2 + yi**2 > (r_max**2)
         ti_masked = np.ma.array(ti, mask=mask)
         contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
-        fig.colorbar(contour, ax=ax, label="Température (°C")
+        fig.colorbar(contour, ax=ax, label="Température °C")
         ax.scatter(x, y, color='black', marker='o', s=25)
         for i, nom in enumerate(x):
             ax.annotate(list(temperature_dict.keys())[i], (x[i], y[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
@@ -182,7 +182,7 @@ class TraitementDonnees:
             print("Arduino non connecté.")
             return
 
-        print("🚀 Acquisition live en cours... (Ctrl+C pour arrêter)")
+        print("Acquisition live en cours... (Ctrl+C pour arrêter)")
         plt.ion()
         fig = None
         if not self.mode_rapide:
@@ -190,10 +190,17 @@ class TraitementDonnees:
             fig.show()
 
         noms_thermistances = [self.positions[i][0] if i != 24 else "R25" for i in self.indices_à_garder]
+        noms_tensions_thermistances = [f"V_{nom}" for nom in noms_thermistances]
         noms_photodiodes = [f"PD{i}" for i in self.canaux_photodiodes]
-        headers = noms_thermistances + noms_photodiodes + ["Puissance estimée (W)", "T_ref", "timestamp"]
+        headers = noms_thermistances + noms_tensions_thermistances + noms_photodiodes + ["Puissance estimée (W)", "T_ref", "timestamp"]
         all_data = []
         t0 = time.time()
+
+        # Création d'un dictionnaire nom → canal
+        nom_to_canal = {}
+        for i in self.indices_à_garder:
+            nom = "R25" if i == 24 else self.positions[i][0]
+            nom_to_canal[nom] = i
 
         try:
             while True:
@@ -205,10 +212,14 @@ class TraitementDonnees:
                 if temp_data:
                     os.system("clear")
                     print("=" * 60)
-                    print("Températures mesurées")
+                    print("Températures et tensions mesurées")
                     print("-" * 60)
-                    for name, temp in temp_data.items():
-                        print(f"{name:<6} : {temp:6.2f} °C")
+                    for i in self.indices_à_garder:
+                        nom = "R25" if i == 24 else self.positions[i][0]
+                        temp = temp_data.get(nom, "--")
+                        tension = data_raw.get(i, "--")
+                        print(f"{nom:<6} : {temp:6.2f} °C | {tension:.3f} V")
+
                     print("-" * 60)
                     print("Tensions photodiodes :")
                     for i in self.canaux_photodiodes:
@@ -220,16 +231,17 @@ class TraitementDonnees:
                     t_max = max(temp_data.values())
                     t_ref = temp_data.get("R25", 25.0)
                     puissance = self.estimate_laser_power(t_ref, t_max, 3.0)
-                    print(f"💡 Puissance estimée : {puissance:.3f} W")
 
                     if not self.mode_rapide and fig:
                         self.afficher_heatmap_dans_figure(temp_data, fig)
                         fig.canvas.draw()
                         fig.canvas.flush_events()
 
-                    ligne = [temp_data.get(name, "--") for name in noms_thermistances]
-                    ligne += [data_raw.get(i, "--") for i in self.canaux_photodiodes]
-                    ligne += [puissance, t_ref, datetime.now().isoformat(timespec='seconds')]
+                    # Génération de la ligne CSV
+                    ligne_temp = [temp_data.get(nom, "--") for nom in noms_thermistances]
+                    ligne_tensions = [data_raw.get(nom_to_canal[nom], "--") for nom in noms_thermistances]
+                    ligne_pds = [data_raw.get(i, "--") for i in self.canaux_photodiodes]
+                    ligne = ligne_temp + ligne_tensions + ligne_pds + [puissance, t_ref, datetime.now().isoformat(timespec='seconds')]
                     all_data.append(ligne)
 
                 time.sleep(interval)
@@ -249,9 +261,19 @@ class TraitementDonnees:
             print(f"Données sauvegardées dans : {csv_path}")
 
 
+    def afficher_coefficients_thermistances(self):
 
-
+        print("\n🧪 Coefficients Steinhart-Hart pour chaque thermistance")
+        print("-" * 80)
+        for i in range(len(self.coefficients)):
+            try:
+                A, B, C = self.coefficients[i]
+                print(f"Index {i:2d} → R{i+1:>2} : A = {A:.6e}, B = {B:.6e}, C = {C:.6e}")
+            except Exception as e:
+                print(f"Index {i:2d} → R{i+1:>2} : Erreur lecture coefficients : {e}")
+        print("-" * 80)
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=False)
+    td = TraitementDonnees(simulation=True)
+    #td.afficher_coefficients_thermistances()
     td.demarrer_acquisition_live(interval=0.05)
