@@ -205,10 +205,14 @@ class TraitementDonnees:
                 if temp_data:
                     os.system("clear")
                     print("=" * 60)
-                    print("Températures mesurées")
+                    print("Températures et tensions mesurées")
                     print("-" * 60)
-                    for name, temp in temp_data.items():
-                        print(f"{name:<6} : {temp:6.2f} °C")
+                    for i in self.indices_à_garder:
+                        nom = "R25" if i == 24 else self.positions[i][0]
+                        temp = temp_data.get(nom, "--")
+                        tension = data_raw.get(i, "--")
+                        print(f"{nom:<6} : {temp:6.2f} °C | {tension:.3f} V")
+
                     print("-" * 60)
                     print("Tensions photodiodes :")
                     for i in self.canaux_photodiodes:
@@ -220,7 +224,6 @@ class TraitementDonnees:
                     t_max = max(temp_data.values())
                     t_ref = temp_data.get("R25", 25.0)
                     puissance = self.estimate_laser_power(t_ref, t_max, 3.0)
-                    #print(f"💡 Puissance estimée : {puissance:.3f} W")
 
                     if not self.mode_rapide and fig:
                         self.afficher_heatmap_dans_figure(temp_data, fig)
@@ -260,16 +263,7 @@ class TraitementDonnees:
                 print(f"Index {i:2d} → R{i+1:>2} : Erreur lecture coefficients : {e}")
         print("-" * 80)
 
-    
-
-
-
-
-
-
-
 if __name__ == "__main__":
     td = TraitementDonnees(simulation=False)
-    td.afficher_coefficients_thermistances()
+    #td.afficher_coefficients_thermistances()
     td.demarrer_acquisition_live(interval=0.05)
-
