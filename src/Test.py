@@ -25,7 +25,7 @@ class TraitementDonnees:
         self.positions = [
             ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
             ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
-            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-3.5, -11.5)),
+            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-3.5, -11.25)),
             ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
             ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
             ("R21", (4.5, -8))
@@ -169,51 +169,69 @@ class TraitementDonnees:
 
 
     # Dans la classe TraitementDonnees
+    # Dans la classe TraitementDonnees (fichier Test.py)
+
     def get_temperatures(self):
+        # --- Facteur d'atténuation pour R24 ---
+        attenuation_factor_r24 = 1.0 # Exemple: réduction de 5%
+
         if self.simulation:
             # --- Logique pour la simulation basée sur CSV ---
             if self.simulation_data is not None and not self.simulation_data.empty:
                 if self.simulation_index >= len(self.simulation_data):
                     self.simulation_index = 0 # Recommencer au début du fichier
+                    print("[SIMULATION] Fin du fichier CSV atteinte, retour au début.")
 
                 # Récupérer la ligne actuelle du DataFrame
                 current_data_row = self.simulation_data.iloc[self.simulation_index]
-                self.simulation_index += 1
+                # Incrémenter pour la prochaine lecture (selon votre config précédente: +10)
+                self.simulation_index += 10
 
-                # Créer le dictionnaire de températures directement depuis la ligne CSV
+                # Créer le dictionnaire de températures
                 temperature_dict = {}
                 valid_data_found = False
                 for i in self.indices_à_garder:
                     thermistor_name = self.positions[i][0]
                     if thermistor_name in current_data_row and pd.notna(current_data_row[thermistor_name]):
-                        temperature_dict[thermistor_name] = current_data_row[thermistor_name]
+                        temp_value = current_data_row[thermistor_name]
+
+                        # --- MODIFICATION ICI (SIMULATION) ---
+                        # Atténuer la valeur si c'est R24
+                        if thermistor_name == "R24":
+                            original_temp_r24_sim = temp_value
+                            temp_value *= attenuation_factor_r24
+                            # Optionnel: log pour vérifier
+                            # print(f"[SIM ATTENUATION] R24 temp: {original_temp_r24_sim:.2f} -> {temp_value:.2f}")
+                        # --- FIN MODIFICATION ---
+
+                        temperature_dict[thermistor_name] = temp_value
                         valid_data_found = True
                     else:
-                        # Gérer les données manquantes ou NaN pour ce thermistor dans cette ligne
-                        # print(f"[AVERTISSEMENT SIMULATION] Donnée manquante/NaN pour {thermistor_name} à l'index CSV {self.simulation_index-1}")
-                        temperature_dict[thermistor_name] = np.nan # Utiliser NaN pour indiquer l'absence de donnée valide
+                        # Gérer les données manquantes ou NaN
+                        temperature_dict[thermistor_name] = np.nan
 
                 if not valid_data_found:
-                    print(f"[ERREUR SIMULATION] Aucune donnée de température valide trouvée à l'index CSV {self.simulation_index-1}.")
-                    return None # Retourner None si la ligne entière est invalide
+                    print(f"[ERREUR SIMULATION] Aucune donnée valide à l'index CSV {self.simulation_index - 10}.") # Ajusté
+                    return None
 
                 return temperature_dict
             else:
-                # --- Fallback: Si le CSV n'est pas chargé, générer des températures aléatoires ---
+                # --- Fallback: Génération aléatoire (inchangé pour l'instant) ---
                 print("[SIMULATION] Données CSV non disponibles, génération de températures aléatoires.")
-                # Génère des températures aléatoires dans une plage plausible
                 random_temps = {self.positions[i][0]: np.random.uniform(20.0, 45.0)
                                 for i in self.indices_à_garder}
+                # On pourrait aussi atténuer R24 ici si nécessaire
+                if "R24" in random_temps:
+                    random_temps["R24"] *= attenuation_factor_r24
                 return random_temps
 
         # --- Logique originale pour le mode non-simulation (lecture série) ---
-        data_voltages = self.lire_donnees() # Lire les tensions depuis le port série
+        data_voltages = self.lire_donnees()
         if data_voltages is None:
-            # lire_donnees a déjà affiché une erreur si nécessaire
             return None
 
         temperatures = []
-        noms = [] # Garder une trace des noms dans le bon ordre
+        noms = []
 
         for i in self.indices_à_garder:
             nom_thermistor = self.positions[i][0]
@@ -221,49 +239,58 @@ class TraitementDonnees:
 
             if i not in data_voltages:
                 print(f"[AVERTISSEMENT] Tension manquante pour le canal {i} ({nom_thermistor})")
-                temperatures.append(np.nan) # Ajouter NaN si la tension manque
-                continue # Passer au canal suivant
+                temperatures.append(np.nan)
+                continue
 
             voltage = data_voltages[i]
 
             # Sélectionner les bons coefficients
-            # Rappel: R24 (nom) est sur le canal 11 (index i) et utilise les coeffs[23]
-            if i == 11: # Canal 11 correspond à R24 dans self.positions
+            is_r24 = False
+            if i == 11: # Canal 11 correspond à R24
                 if 23 < len(self.coefficients):
                     coeffs = self.coefficients[23]
+                    is_r24 = True # Marquer que c'est R24
                 else:
-                    print(f"[ERREUR] Index de coefficient 23 hors limites pour R24 (canal 11).")
+                    print(f"[ERREUR] Index coeff 23 hors limites pour R24 (canal 11).")
                     temperatures.append(np.nan)
                     continue
-            else: # Pour tous les autres canaux dans indices_à_garder
+            else: # Autres canaux
                 if i < len(self.coefficients):
                     coeffs = self.coefficients[i]
                 else:
-                    print(f"[ERREUR] Index de coefficient {i} hors limites pour {nom_thermistor}.")
+                    print(f"[ERREUR] Index coeff {i} hors limites pour {nom_thermistor}.")
                     temperatures.append(np.nan)
                     continue
 
             # Calculer résistance et température
             resistance = self.compute_resistance(voltage)
-            if resistance == float('inf') or resistance <= 0: # Gérer résistance invalide
-                # print(f"[AVERTISSEMENT] Résistance invalide ({resistance:.2f} Ω) calculée pour {nom_thermistor} (canal {i}) à partir de {voltage:.3f} V.")
+            if resistance == float('inf') or resistance <= 0:
                 temp = np.nan
             else:
                 try:
                     temp = self.compute_temperature(resistance, coeffs)
-                except ValueError: # np.log peut échouer si R est <= 0
-                    # print(f"[AVERTISSEMENT] Erreur de calcul de température pour {nom_thermistor} (R={resistance:.2f} Ω).")
+
+                    # --- MODIFICATION ICI (NON-SIMULATION) ---
+                    # Atténuer la température si c'est R24 et si la température est valide
+                    if is_r24 and pd.notna(temp):
+                        original_temp_r24 = temp
+                        temp *= attenuation_factor_r24
+                        # Optionnel: log pour vérifier
+                        # print(f"[ATTENUATION] R24 temp: {original_temp_r24:.2f} -> {temp:.2f}")
+                    # --- FIN MODIFICATION ---
+
+                except ValueError:
                     temp = np.nan
 
             temperatures.append(temp)
 
-        # Créer le dictionnaire final en associant les noms et les températures calculées
-        # S'assurer que le nombre de noms et de températures correspond
         if len(noms) != len(temperatures):
-            print("[ERREUR CRITIQUE] Discordance entre noms et températures calculées.")
+            print("[ERREUR CRITIQUE] Discordance noms/températures.")
             return None
 
         return dict(zip(noms, temperatures))
+
+
 
 
 
@@ -298,13 +325,13 @@ class TraitementDonnees:
             avg_temp = np.mean(valid_temps_list)
             baseline_temp = avg_temp - 1.0 # Référence pour barycentre et bords
             can_calculate_laser_pos = True
-            # print(f"[INFO] T° Moy: {avg_temp:.2f}, T° Réf/Bord: {baseline_temp:.2f}") # Optionnel
+            
 
-        # 3. Calcul du barycentre pondéré (inchangé)
+        # 3. Calcul du barycentre pondéré 
         laser_x, laser_y = None, None
         laser_pos_found = False
         if can_calculate_laser_pos and len(x_orig) > 0:
-            # ... (logique de calcul du barycentre inchangée) ...
+            # ... (logique de calcul du barycentre ) ...
             total_weight = 0.0
             weighted_x_sum = 0.0
             weighted_y_sum = 0.0
@@ -356,7 +383,7 @@ class TraitementDonnees:
         ti_masked = np.ma.array(ti, mask=mask) # Données masquées pour affichage original
 
         # --- 5. Calcul spécifique pour la deuxième heatmap : Filtre Gaussien ---
-        sigma_filtre = 2 # Ajustable
+        sigma_filtre = 0.01 # Ajustable
         ti_filtered = gaussian_filter(ti, sigma=sigma_filtre, mode='nearest')
         ti_filtered_masked = np.ma.array(ti_filtered, mask=mask) # Masquer les données filtrées
 
