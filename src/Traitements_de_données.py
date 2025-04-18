@@ -190,10 +190,17 @@ class TraitementDonnees:
             fig.show()
 
         noms_thermistances = [self.positions[i][0] if i != 24 else "R25" for i in self.indices_à_garder]
+        noms_tensions_thermistances = [f"V_{nom}" for nom in noms_thermistances]
         noms_photodiodes = [f"PD{i}" for i in self.canaux_photodiodes]
-        headers = noms_thermistances + noms_photodiodes + ["Puissance estimée (W)", "T_ref", "timestamp"]
+        headers = noms_thermistances + noms_tensions_thermistances + noms_photodiodes + ["Puissance estimée (W)", "T_ref", "timestamp"]
         all_data = []
         t0 = time.time()
+
+        # Création d'un dictionnaire nom → canal
+        nom_to_canal = {}
+        for i in self.indices_à_garder:
+            nom = "R25" if i == 24 else self.positions[i][0]
+            nom_to_canal[nom] = i
 
         try:
             while True:
@@ -230,9 +237,11 @@ class TraitementDonnees:
                         fig.canvas.draw()
                         fig.canvas.flush_events()
 
-                    ligne = [temp_data.get(name, "--") for name in noms_thermistances]
-                    ligne += [data_raw.get(i, "--") for i in self.canaux_photodiodes]
-                    ligne += [puissance, t_ref, datetime.now().isoformat(timespec='seconds')]
+                    # Génération de la ligne CSV
+                    ligne_temp = [temp_data.get(nom, "--") for nom in noms_thermistances]
+                    ligne_tensions = [data_raw.get(nom_to_canal[nom], "--") for nom in noms_thermistances]
+                    ligne_pds = [data_raw.get(i, "--") for i in self.canaux_photodiodes]
+                    ligne = ligne_temp + ligne_tensions + ligne_pds + [puissance, t_ref, datetime.now().isoformat(timespec='seconds')]
                     all_data.append(ligne)
 
                 time.sleep(interval)
@@ -251,6 +260,7 @@ class TraitementDonnees:
 
             print(f"Données sauvegardées dans : {csv_path}")
 
+
     def afficher_coefficients_thermistances(self):
 
         print("\n🧪 Coefficients Steinhart-Hart pour chaque thermistance")
@@ -264,6 +274,6 @@ class TraitementDonnees:
         print("-" * 80)
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=False)
+    td = TraitementDonnees(simulation=True)
     #td.afficher_coefficients_thermistances()
     td.demarrer_acquisition_live(interval=0.05)
