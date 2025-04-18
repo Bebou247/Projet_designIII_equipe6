@@ -62,7 +62,7 @@ class TraitementDonnees:
     def estimate_laser_power(self, temp_ref, temp_measured, time):
         delta_t = temp_measured - temp_ref
         K = 0.8411
-        tau = 0.9987
+        tau = 0.9987  
         coeff = 0.9999
 
         denominator = K * (1 - np.exp(-time / tau))
@@ -152,7 +152,7 @@ class TraitementDonnees:
             print("Pas assez de données pour générer la heatmap.")
             return
 
-        rbf = Rbf(x, y, t, function='gaussian', smooth=0.1, epsilon=0.1)
+        rbf = Rbf(x, y, t, function='multiquadric', smooth=5, epsilon=0.1)
         grid_size = 300
         r_max = 12.25
         xi, yi = np.meshgrid(
@@ -220,7 +220,7 @@ class TraitementDonnees:
                     t_max = max(temp_data.values())
                     t_ref = temp_data.get("R25", 25.0)
                     puissance = self.estimate_laser_power(t_ref, t_max, 3.0)
-                    print(f"💡 Puissance estimée : {puissance:.3f} W")
+                    #print(f"💡 Puissance estimée : {puissance:.3f} W")
 
                     if not self.mode_rapide and fig:
                         self.afficher_heatmap_dans_figure(temp_data, fig)
@@ -248,10 +248,28 @@ class TraitementDonnees:
 
             print(f"Données sauvegardées dans : {csv_path}")
 
+    def afficher_coefficients_thermistances(self):
+
+        print("\n🧪 Coefficients Steinhart-Hart pour chaque thermistance")
+        print("-" * 80)
+        for i in range(len(self.coefficients)):
+            try:
+                A, B, C = self.coefficients[i]
+                print(f"Index {i:2d} → R{i+1:>2} : A = {A:.6e}, B = {B:.6e}, C = {C:.6e}")
+            except Exception as e:
+                print(f"Index {i:2d} → R{i+1:>2} : Erreur lecture coefficients : {e}")
+        print("-" * 80)
+
+    
+
+
+
 
 
 
 
 if __name__ == "__main__":
     td = TraitementDonnees(simulation=False)
+    td.afficher_coefficients_thermistances()
     td.demarrer_acquisition_live(interval=0.05)
+

@@ -37,7 +37,7 @@ class TraitementDonnees:
             self.ser = None
             print("[SIMULATION] Mode simulation activé.")
             try:
-                simulation_file_path = Path(__file__).parent.parent / "data" / "Hauteur 7.csv"
+                simulation_file_path = Path(__file__).parent.parent / "data" / "Hauteur 1.csv"
                 self.simulation_data = pd.read_csv(simulation_file_path)
                 print(f"[SIMULATION] Chargement : {simulation_file_path.resolve()}")
 
@@ -122,7 +122,7 @@ class TraitementDonnees:
             y_all = y
             t_all = t
 
-        rbf = Rbf(x_all, y_all, t_all, function='multiquadric', smooth=1.0, epsilon=1)
+        rbf = Rbf(x_all, y_all, t_all, function='multiquadric', smooth=5.0, epsilon=3)
         grid_size = 200
         xi, yi = np.meshgrid(np.linspace(-r_max, r_max, grid_size),
                              np.linspace(-r_max, r_max, grid_size))
@@ -135,7 +135,7 @@ class TraitementDonnees:
         x_laser, y_laser = xi[max_idx], yi[max_idx]
         temp_peak = ti_masked[max_idx]
 
-        contour = ax.contourf(xi, yi, ti_masked, levels=200, cmap="plasma")
+        contour = ax.contourf(xi, yi, ti_masked, levels=400, cmap="plasma")
         fig.colorbar(contour, ax=ax, label="Température (°C)")
 
         ax.scatter(x, y, color='black', s=25)
