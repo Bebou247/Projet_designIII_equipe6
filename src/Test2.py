@@ -33,7 +33,7 @@ class TraitementDonnees:
         # J'ai changé tempo la pos de la R24 (-3.5, -11.25) Canaux 0 à 20 utilisés pour les thermistances R1-R11, R13-R21, R24(sur canal 11)
         self.indices_à_garder = list(range(21))
         self.simulation_data = None
-        self.simulation_index =  560
+        self.simulation_index =  0
         # Te permet de décider à quel rang tu commences
         # Noms des colonnes attendues dans le CSV (basés sur self.positions et self.indices_à_garder)
         self.simulation_columns = [self.positions[i][0] for i in self.indices_à_garder]
@@ -45,7 +45,7 @@ class TraitementDonnees:
                 # Chemin vers le fichier CSV relatif au script Test.py
                 script_dir = Path(__file__).parent
                 # Te permet de choisir quel fichier prendre
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 1.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 4.csv"
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
                 self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -219,9 +219,11 @@ class TraitementDonnees:
                 r16_temp_sim = temperature_dict.get("R16", np.nan) # << NOUVEAU: Obtenir R16
                 r24_temp_sim = temperature_dict.get("R24", np.nan)
                 r3_temp_sim = temperature_dict.get("R3", np.nan)
+                r18_temp_sim = temperature_dict.get("R18", np.nan)
+                r21_temp_sim = temperature_dict.get("R21", np.nan)
 
                 for name, temp in temperature_dict.items():
-                    if pd.notna(temp) and name not in ["R19", "R20", "R24"]: # Exclut aussi R16 implicitement si R16 est dans la liste
+                    if pd.notna(temp) and name not in ["R19"]: # Exclut aussi R16 implicitement si R16 est dans la liste
                         temps_for_check_sim.append(temp)
 
                 # 4. Vérifier les conditions et appliquer les boosts si nécessaire
@@ -238,7 +240,7 @@ class TraitementDonnees:
                     )
 
                     if condition_1_met and pd.notna(r24_temp_sim):
-                        boosted_r24_temp = r24_temp_sim * 1.08
+                        boosted_r24_temp = r24_temp_sim * 1.10
                         temperature_dict["R24"] = boosted_r24_temp
                         r24_temp_sim = boosted_r24_temp # Mettre à jour pour la condition suivante
                         # print(f"[SIM BOOST 1 R24] Boost 1.08 appliqué")
@@ -248,7 +250,8 @@ class TraitementDonnees:
                         pd.notna(r19_temp_sim) and
                         pd.notna(r16_temp_sim) and
                         r19_temp_sim >= (average_for_check_sim * 1.21) and # R19 >= 120%
-                        r16_temp_sim <= (average_for_check_sim * 1.19)    # R16 <= 118%
+                        r16_temp_sim <= (average_for_check_sim * 1.10) and
+                        r18_temp_sim <= (average_for_check_sim * 1.02)# R16 <= 118%
                     )
 
                     if condition_2_met and pd.notna(r24_temp_sim):
@@ -256,7 +259,19 @@ class TraitementDonnees:
                         temperature_dict["R24"] = boosted_r24_temp_2
                         # print(f"[SIM BOOST 2 R24] Boost 1.20 appliqué")
                         # print(f"    Cond 2: R19={r19_temp_sim:.2f} (>= {average_for_check_sim*1.20:.2f}), R16={r16_temp_sim:.2f} (<= {average_for_check_sim*1.18:.2f})")
+                    
+                    condition_3_met = (
+                        pd.notna(r18_temp_sim) and
+                        pd.notna(r21_temp_sim) and
+                        r18_temp_sim >= (average_for_check_sim * 1.12) and
+                        r21_temp_sim >= (average_for_check_sim * 1.12)
+                    )
 
+                    if condition_3_met and pd.notna(r18_temp_sim) and pd.notna(r21_temp_sim ):
+                        boosted_r21_temp = r21_temp_sim * 1.05
+                        boosted_r18_temp = r18_temp_sim * 1.15
+                        temperature_dict["R21"] = boosted_r21_temp
+                        temperature_dict["R18"] = boosted_r18_temp
 
                 # --- FIN LOGIQUE POUR BOOSTER R24 ---
 
@@ -408,17 +423,19 @@ class TraitementDonnees:
 
     # Dans la classe TraitementDonnees (fichier Test.py)
 
+    # Dans la classe TraitementDonnees (fichier Test2.py)
+
     def afficher_heatmap_dans_figure(self, temperature_dict, fig, elapsed_time):
         fig.clear() # Efface toute la figure précédente
 
-        # --- Créer deux sous-graphiques (Axes) côte à côte ---
-        ax1, ax2 = fig.subplots(1, 2) # 1 ligne, 2 colonnes
+        # --- Revenir à un seul axe ---
+        ax = fig.add_subplot(111)
 
-        # --- Préparation des données (commune aux deux graphiques) ---
+        # --- Préparation des données (commune) ---
         x_orig, y_orig, t_orig = [], [], []
         valid_temps_list = []
 
-        # 1. Extraire les données valides (inchangé)
+        # 1. Extraire les données valides
         for i in self.indices_à_garder:
             name, pos = self.positions[i]
             temp_val = temperature_dict.get(name, np.nan)
@@ -428,7 +445,7 @@ class TraitementDonnees:
                 t_orig.append(temp_val)
                 valid_temps_list.append(temp_val)
 
-        # 2. Calculer la température de référence/bord (inchangé)
+        # 2. Calculer la température de référence/bord
         can_calculate_laser_pos = False
         if not valid_temps_list:
             baseline_temp = 20.0
@@ -437,13 +454,11 @@ class TraitementDonnees:
             avg_temp = np.mean(valid_temps_list)
             baseline_temp = avg_temp - 1.0 # Référence pour barycentre et bords
             can_calculate_laser_pos = True
-            
 
-        # 3. Calcul du barycentre pondéré 
+        # 3. Calcul du barycentre pondéré
         laser_x, laser_y = None, None
         laser_pos_found = False
         if can_calculate_laser_pos and len(x_orig) > 0:
-            # ... (logique de calcul du barycentre ) ...
             total_weight = 0.0
             weighted_x_sum = 0.0
             weighted_y_sum = 0.0
@@ -458,11 +473,8 @@ class TraitementDonnees:
                 laser_x = weighted_x_sum / total_weight
                 laser_y = weighted_y_sum / total_weight
                 laser_pos_found = True
-                # print(f"[INFO LASER BARY] Pos: ({laser_x:.2f}, {laser_y:.2f})") # Optionnel
-            # else: # Optionnel
-                # print("[AVERTISSEMENT BARY] Poids insuffisant.")
 
-        # 4. Interpolation RBF (commune)
+        # 4. Interpolation RBF
         r_max = 12.5
         num_edge_points = 12
         edge_angles = np.linspace(0, 2 * np.pi, num_edge_points, endpoint=False)
@@ -476,12 +488,9 @@ class TraitementDonnees:
 
         if len(x_combined) < 3:
             print("[ERREUR HEATMAP] Pas assez de points pour l'interpolation.")
-            # Afficher un message sur les deux axes
-            ax1.set_title("Pas assez de données")
-            ax2.set_title("Pas assez de données")
-            if x_orig: # Afficher les points si possible
-                ax1.scatter(x_orig, y_orig, color='black', marker='o', s=25)
-                ax2.scatter(x_orig, y_orig, color='black', marker='o', s=25)
+            ax.set_title("Pas assez de données")
+            if x_orig:
+                ax.scatter(x_orig, y_orig, color='black', marker='o', s=25)
             return
 
         rbf = Rbf(x_combined, y_combined, t_combined, function='multiquadric', smooth=0.5)
@@ -492,82 +501,46 @@ class TraitementDonnees:
         )
         ti = rbf(xi, yi) # Données interpolées brutes
         mask = xi**2 + yi**2 > r_max**2
-        ti_masked = np.ma.array(ti, mask=mask) # Données masquées pour affichage original
+        ti_masked = np.ma.array(ti, mask=mask) # Données masquées pour affichage
 
-        # --- 5. Calcul spécifique pour la deuxième heatmap : Filtre Gaussien ---
-        sigma_filtre = 0.01 # Ajustable
-        ti_filtered = gaussian_filter(ti, sigma=sigma_filtre, mode='nearest')
-        ti_filtered_masked = np.ma.array(ti_filtered, mask=mask) # Masquer les données filtrées
+        # --- 5. Suppression du calcul du filtre Gaussien et du max filtré ---
+        # (Les lignes correspondantes ont été enlevées)
 
-        # Trouver le max sur la carte filtrée
-        max_x_gauss, max_y_gauss = None, None
-        point_max_gauss_trouve = False
-        try:
-            max_idx_flat_gauss = np.argmax(ti_filtered_masked)
-            max_idx_2d_gauss = np.unravel_index(max_idx_flat_gauss, ti.shape)
-            max_x_gauss = xi[max_idx_2d_gauss]
-            max_y_gauss = yi[max_idx_2d_gauss]
-            point_max_gauss_trouve = True
-            # print(f"[INFO LASER GAUSS] Pos: ({max_x_gauss:.2f}, {max_y_gauss:.2f})") # Optionnel
-        except (ValueError, IndexError):
-            # print("[AVERTISSEMENT GAUSS] Impossible de trouver le max filtré.") # Optionnel
-            point_max_gauss_trouve = False
+        # --- 6. Affichage sur l'axe unique (ax) : Original + Barycentre ---
+        contour = ax.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
+        fig.colorbar(contour, ax=ax, label="Température (°C)")
+        ax.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances')
 
-
-        # --- 6. Affichage sur le premier axe (ax1) : Original + Barycentre ---
-        contour1 = ax1.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
-        fig.colorbar(contour1, ax=ax1, label="Température (°C)")
-        ax1.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances')
-        # Annotations des points réels sur ax1
+        # Annotations des points réels sur ax
         for i in range(len(x_orig)):
-            # ... (logique d'annotation inchangée, mais utiliser ax1.annotate) ...
             original_index_in_positions = -1
             for k in self.indices_à_garder:
-                if self.positions[k][1] == (x_orig[i], y_orig[i]):
+                # Comparaison prudente des coordonnées (gestion des flottants)
+                if np.isclose(self.positions[k][1][0], x_orig[i]) and np.isclose(self.positions[k][1][1], y_orig[i]):
                     original_index_in_positions = k
                     break
             if original_index_in_positions != -1:
                 name = self.positions[original_index_in_positions][0]
-                ax1.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
+                ax.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
 
-        # Afficher le point barycentre (vert) sur ax1
+        # Afficher le point barycentre (vert) sur ax
         if laser_pos_found:
-            ax1.plot(laser_x, laser_y, 'go', markersize=10, label=f'Laser (Bary) @ ({laser_x:.1f}, {laser_y:.1f})')
+            ax.plot(laser_x, laser_y, 'go', markersize=10, label=f'Laser (Bary) @ ({laser_x:.1f}, {laser_y:.1f})')
 
-        # Configuration ax1
-        ax1.set_aspect('equal')
-        title_ax1 = f"Original + Barycentre (Tps: {elapsed_time:.2f} s)"
+        # Configuration ax
+        ax.set_aspect('equal')
+        title_ax = f"Heatmap (Tps: {elapsed_time:.2f} s)"
         if laser_pos_found:
-            title_ax1 += f"\nLaser @ ({laser_x:.1f}, {laser_y:.1f})"
-        ax1.set_title(title_ax1, fontsize=10)
-        ax1.set_xlabel("X (mm)")
-        ax1.set_ylabel("Y (mm)")
-        ax1.set_xlim(-r_max - 1, r_max + 1)
-        ax1.set_ylim(-r_max - 1, r_max + 1)
-        ax1.legend(fontsize=8)
+            title_ax += f"\nLaser @ ({laser_x:.1f}, {laser_y:.1f})"
+        ax.set_title(title_ax, fontsize=10)
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.set_xlim(-r_max - 1, r_max + 1)
+        ax.set_ylim(-r_max - 1, r_max + 1)
+        ax.legend(fontsize=8)
 
-
-        # --- 7. Affichage sur le deuxième axe (ax2) : Filtré + Max Gaussien ---
-        contour2 = ax2.contourf(xi, yi, ti_filtered_masked, levels=100, cmap="plasma") # Utilise les données filtrées
-        fig.colorbar(contour2, ax=ax2, label="Température Filtrée (°C)")
-        # Optionnel: afficher aussi les points originaux sur ax2
-        # ax2.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances')
-
-        # Afficher le point max gaussien (étoile rouge) sur ax2
-        if point_max_gauss_trouve:
-            ax2.plot(max_x_gauss, max_y_gauss, 'r*', markersize=12, label=f'Max (Gauss) @ ({max_x_gauss:.1f}, {max_y_gauss:.1f})')
-
-        # Configuration ax2
-        ax2.set_aspect('equal')
-        title_ax2 = f"Filtre Gaussien (σ={sigma_filtre}) (Tps: {elapsed_time:.2f} s)"
-        if point_max_gauss_trouve:
-            title_ax2 += f"\nMax @ ({max_x_gauss:.1f}, {max_y_gauss:.1f})"
-        ax2.set_title(title_ax2, fontsize=10)
-        ax2.set_xlabel("X (mm)")
-        ax2.set_ylabel("Y (mm)") # Ou laisser vide si évident
-        ax2.set_xlim(-r_max - 1, r_max + 1)
-        ax2.set_ylim(-r_max - 1, r_max + 1)
-        ax2.legend(fontsize=8)
+        # --- 7. Suppression de l'affichage sur le deuxième axe (ax2) ---
+        # (Les lignes correspondantes ont été enlevées)
 
         # --- Finalisation ---
         fig.tight_layout() 
