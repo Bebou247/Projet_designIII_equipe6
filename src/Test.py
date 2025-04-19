@@ -37,73 +37,42 @@ class TraitementDonnees:
     def __init__(self, port="/dev/cu.usbmodem14201", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.port = port
         self.simulation = simulation
-        try:
-            self.coefficients = np.load(coeffs_path, allow_pickle=True)
-        except FileNotFoundError:
-            print(f"[ERREUR] Fichier coefficients non trouvé: {coeffs_path}")
-            # Gérer l'erreur comme nécessaire, par exemple:
-            self.coefficients = None # Ou lever une exception
+        self.coefficients = np.load(coeffs_path, allow_pickle=True)
+
+        # Décalage à appliquer
+        decalage_x = -0.4  # vers la gauche
+        decalage_y = -0.2  # légèrement plus bas
 
         # 🔁 R24 à l’ancienne position de R24 (canal 11), R12 supprimée
         self.positions = [
-            ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
-            ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
-            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-4, -11.25)), # Position R24
-            ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
-            ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
-            ("R21", (4.5, -8))
+            ("R1", (11 + decalage_x, 0 + decalage_y)), ("R2", (3 + decalage_x, 0 + decalage_y)), ("R3", (-3 + decalage_x, 0 + decalage_y)), ("R4", (-11 + decalage_x, 0 + decalage_y)),
+            ("R5", (8 + decalage_x, 2.5 + decalage_y)), ("R6", (0 + decalage_x, 2.5 + decalage_y)), ("R7", (-8 + decalage_x, 2.5 + decalage_y)), ("R8", (8 + decalage_x, 5.5 + decalage_y)),
+            ("R9", (0 + decalage_x, 5.5 + decalage_y)), ("R10", (-8 + decalage_x, 5.5 + decalage_y)), ("R11", (4.5 + decalage_x, 8 + decalage_y)), ("R24", (-3.5 + decalage_x, -11.25 + decalage_y)),
+            ("R13", (4 + decalage_x, 11.25 + decalage_y)), ("R14", (-4 + decalage_x, 11.25 + decalage_y)), ("R15", (8 + decalage_x, -2.5 + decalage_y)), ("R16", (0 + decalage_x, -2.5 + decalage_y)),
+            ("R17", (-8 + decalage_x, -2.5 + decalage_y)), ("R18", (8 + decalage_x, -5.5 + decalage_y)), ("R19", (0 + decalage_x, -5.5 + decalage_y)), ("R20", (-8 + decalage_x, -5.5 + decalage_y)),
+            ("R21", (4.5 + decalage_x, -8 + decalage_y)), ("R25", (0 + decalage_x, -11.5 + decalage_y))
         ]
-        # Canaux 0 à 20 utilisés pour les thermistances R1-R11, R13-R21, R24(sur canal 11)
-        self.indices_à_garder = list(range(21)) # 0 à 20 inclus
+
+        self.indices_a_garder = [i for i, (nom, _) in enumerate(self.positions) if nom != "R25"]
+        self.simulation_columns = [nom for i, (nom, _) in enumerate(self.positions) if i in self.indices_a_garder]
         self.simulation_data = None
         self.simulation_index = 0
-        self.simulation_columns = [self.positions[i][0] for i in self.indices_à_garder]
-
-        # --- Mapping Nom -> Index dans self.positions (utile pour les coefficients) ---
-        # Note: Cet index correspond à l'index dans la liste self.positions originale (0-20)
-        self.name_to_position_index = {name: idx for idx, (name, pos) in enumerate(self.positions)}
-       
-        self.name_to_coeffs_index = {}
-        for name, pos_idx in self.name_to_position_index.items():
-            if name == "R24":
-                self.name_to_coeffs_index[name] = 23
-            elif name == "R19":
-                self.name_to_coeffs_index[name] = 18
-            elif name == "R20":
-                self.name_to_coeffs_index[name] = 19
-            elif name == "R16":
-                self.name_to_coeffs_index[name] = 15
-            else:
-                # Assurez-vous que l'index de position est valide pour les coefficients
-                # Si R12 était présent avant, les indices pourraient être décalés.
-                # Ici, on suppose que l'index de position (0-10, 12-20) correspond
-                # directement aux indices de coefficients (0-10, 12-20).
-                # Vérifiez la structure de votre fichier coefficients.npy !
-                self.name_to_coeffs_index[name] = pos_idx # Hypothèse à vérifier
 
         if self.simulation:
             self.ser = None
             print("[SIMULATION] Mode simulation activé.")
             try:
-                script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 3.csv"
-                self.simulation_data = pd.read_csv(simulation_file_path)
-                print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
+                simulation_file_path = Path(__file__).parent.parent / "data" / "10 W centre (hauteur 2 à 6).csv"
+                df = pd.read_csv(simulation_file_path, sep=";", decimal=",", engine="python")
+                df.dropna(axis=1, how='all', inplace=True)
 
-                missing_cols = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
-                if missing_cols:
-                    print(f"[ERREUR SIMULATION] Colonnes manquantes dans {simulation_file_path.name}: {missing_cols}")
-                    self.simulation_data = None
-                else:
-                    for col in self.simulation_columns:
-                        self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
-                    print(f"[SIMULATION] Fichier CSV chargé. {len(self.simulation_data)} lignes trouvées.")
-                    if self.simulation_data.isnull().values.any():
-                        print("[AVERTISSEMENT SIMULATION] Le fichier CSV contient des valeurs non numériques après conversion.")
+                idx_tref = df.columns.get_loc("T_ref")
+                self.simulation_columns = df.columns[:idx_tref].tolist()
+                self.simulation_data = df
 
-            except FileNotFoundError:
-                print(f"[ERREUR SIMULATION] Fichier non trouvé : {simulation_file_path.resolve()}")
-                self.simulation_data = None
+                print(f"[SIMULATION] Chargement : {simulation_file_path.resolve()}")
+                print(f"[SIMULATION] {len(self.simulation_data)} lignes chargées.")
+
             except Exception as e:
                 print(f"[ERREUR SIMULATION] Impossible de charger ou lire le fichier CSV : {e}")
                 self.simulation_data = None
@@ -489,167 +458,74 @@ class TraitementDonnees:
     def afficher_heatmap_dans_figure(self, temperature_dict, fig, elapsed_time):
         fig.clear()
         ax = fig.add_subplot(111)
-        r_max = 12.5 # Rayon max pour l'affichage et le masque
 
-        # --- 1. Préparation des données valides ---
-        x_orig, y_orig, t_orig = [], [], []
-        valid_temps_list = []
-        names_orig = [] # Garder les noms pour l'annotation
+        x, y, t = [], [], []
+        for i in self.indices_a_garder:
+            name, (xi, yi) = self.positions[i]
+            temp = temperature_dict.get(name, np.nan)
+            if pd.notna(temp):
+                x.append(xi)
+                y.append(yi)
+                t.append(temp)
 
-        for i in self.indices_à_garder:
-            name, pos = self.positions[i]
-            temp_val = temperature_dict.get(name, np.nan)
-            if pd.notna(temp_val):
-                x_orig.append(pos[0])
-                y_orig.append(pos[1])
-                t_orig.append(temp_val)
-                valid_temps_list.append(temp_val)
-                names_orig.append(name)
+        if len(x) < 3:
+            print("[SKIP] Trop peu de données valides.")
+            return
 
-        # Convertir en arrays numpy pour curve_fit et calculs
-        x_orig = np.array(x_orig)
-        y_orig = np.array(y_orig)
-        t_orig = np.array(t_orig)
+        r_max = 12.5
 
-        # --- 2. Vérifier s'il y a assez de données pour l'ajustement ---
-        if len(t_orig) < 6:
-            print(f"[ERREUR HEATMAP] Pas assez de points valides ({len(t_orig)} < 6) pour l'ajustement Gaussien.")
-            ax.set_title("Pas assez de données pour l'ajustement")
-            if len(t_orig) > 0:
-                ax.scatter(x_orig, y_orig, c=t_orig, cmap="plasma", marker='o', s=35, label='Thermistances (Données insuffisantes)')
-                for i, name in enumerate(names_orig):
-                     ax.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
-            ax.set_xlim(-r_max - 1, r_max + 1)
-            ax.set_ylim(-r_max - 1, r_max + 1)
-            ax.set_aspect('equal')
-            if len(t_orig) > 0: # Afficher la légende seulement si des points sont affichés
-                ax.legend(fontsize=8)
-            fig.tight_layout()
-            # --- MODIFICATION ICI: Retourner (None, False) ---
-            return None, False # <--- MODIFIÉ: Assure un retour de tuple
+        if utiliser_bords:
+            edge_angles = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+            edge_x = r_max * np.cos(edge_angles)
+            edge_y = r_max * np.sin(edge_angles)
+            edge_t = [np.mean(t) - 2.0] * len(edge_x)
 
-        # --- 3. Estimations initiales (p0) pour curve_fit ---
-        # (Le reste de cette section est inchangé...)
-        k0 = np.min(t_orig) if len(valid_temps_list) > 0 else 20.0
-        max_temp = np.max(t_orig)
-        A0 = max_temp - k0 if max_temp > k0 else 10.0
-        idx_max = np.argmax(t_orig)
-        x0_guess = x_orig[idx_max]
-        y0_guess = y_orig[idx_max]
-        sigma_guess = r_max / 4.0
-        p0 = [A0, x0_guess, y0_guess, sigma_guess, sigma_guess, k0]
-
-        # --- 4. Préparer les données pour curve_fit ---
-        xy_data_orig = np.vstack((x_orig.ravel(), y_orig.ravel()))
-
-        # --- 5. Ajustement avec Levenberg-Marquardt (curve_fit) ---
-        popt = None
-        pcov = None
-        fit_successful = False
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", OptimizeWarning)
-                bounds = ([-np.inf, -r_max, -r_max, 1e-6, 1e-6, -np.inf], # Bornes inf (sigmas > 0 + epsilon)
-                          [np.inf, r_max, r_max, r_max*2, r_max*2, np.inf]) # Bornes sup
-                # --- MODIFICATION ICI: Utiliser method='trf' avec les bornes ---
-                popt, pcov = curve_fit(gaussian_2d, xy_data_orig, t_orig.ravel(), p0=p0, method='trf', maxfev=5000, bounds=bounds) # <--- MODIFIÉ
-            fit_successful = True
-            # print(f"Paramètres ajustés (A, x0, y0, sx, sy, k): {popt}")
-        except RuntimeError as e:
-            print(f"[AVERTISSEMENT HEATMAP] Échec de l'ajustement initial ('trf' avec bornes): {e}")
-            # Tentative SANS bornes avec 'lm' (qui est fait pour ça)
-            try:
-                 with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", OptimizeWarning)
-                    # --- Utiliser 'lm' SANS bornes ---
-                    popt, pcov = curve_fit(gaussian_2d, xy_data_orig, t_orig.ravel(), p0=p0, method='lm', maxfev=5000) # <--- 'lm' sans bornes
-                 fit_successful = True
-                 print("[INFO HEATMAP] Ajustement réussi sans bornes ('lm') après échec initial.")
-            except RuntimeError as e2:
-                 print(f"[ERREUR HEATMAP] Échec de l'ajustement LM même sans bornes: {e2}")
-                 fit_successful = False
-            except ValueError as e_val: # Capturer aussi ValueError ici
-                 print(f"[ERREUR HEATMAP] Erreur de valeur pendant l'ajustement sans bornes ('lm'): {e_val}")
-                 fit_successful = False
-        except ValueError as e:
-             # Cette erreur peut aussi survenir avec 'trf' si p0 est hors bornes ou données invalides
-             print(f"[ERREUR HEATMAP] Erreur de valeur pendant l'ajustement initial ('trf'): {e}")
-             fit_successful = False
-
-        # --- 6. Génération de la grille et calcul de la heatmap ajustée ---
-        # (Inchangé...)
-        grid_size = 100
-        xi, yi = np.meshgrid(
-            np.linspace(-r_max, r_max, grid_size),
-            np.linspace(-r_max, r_max, grid_size)
-        )
-        xy_data_grid = np.vstack((xi.ravel(), yi.ravel()))
-
-        if fit_successful and popt is not None:
-            ti_fit = gaussian_2d(xy_data_grid, *popt)
-            ti_reshaped = ti_fit.reshape(grid_size, grid_size)
-            A_fit, x0_fit, y0_fit, sx_fit, sy_fit, k_fit = popt
-            # S'assurer que les sigmas sont positifs pour l'affichage (ils devraient l'être à cause des bornes/abs dans gaussian_2d)
-            sx_fit, sy_fit = np.abs(sx_fit), np.abs(sy_fit)
-            title_suffix = f"\nFit: A={A_fit:.1f}, Ctr=({x0_fit:.1f},{y0_fit:.1f}), Sig=({sx_fit:.1f},{sy_fit:.1f}), k={k_fit:.1f}"
-            laser_pos_label = f'Centre Gaussien @ ({x0_fit:.1f}, {y0_fit:.1f})'
-            laser_x, laser_y = x0_fit, y0_fit
-            laser_pos_found = True
+            x_all = x + list(edge_x)
+            y_all = y + list(edge_y)
+            t_all = t + edge_t
         else:
-            print("[AVERTISSEMENT HEATMAP] Affichage basé sur l'estimation initiale car l'ajustement a échoué.")
-            # Utiliser p0 pour l'affichage si l'ajustement a échoué
-            ti_initial_guess = gaussian_2d(xy_data_grid, *p0)
-            ti_reshaped = ti_initial_guess.reshape(grid_size, grid_size)
-            title_suffix = "\n(Échec de l'ajustement Gaussien)"
-            laser_pos_label = 'Centre (Échec Fit)'
-            laser_x, laser_y = None, None
-            laser_pos_found = False
-            # Utiliser les valeurs de p0 pour vmin/vmax si le fit échoue
-            A0_disp, _, _, _, _, k0_disp = p0
-            vmin_fail = k0_disp - 1
-            vmax_fail = k0_disp + A0_disp + 1
+            x_all = x[:]
+            y_all = y[:]
+            t_all = t[:]
 
+        points_centre = [(-2, 2), (2, -2), (0, 0)]
+        temp_moy = np.mean(t)
+        for cx, cy in points_centre:
+            x_all.append(cx)
+            y_all.append(cy)
+            t_all.append(temp_moy - 0.5)
 
-        # Masque pour la zone circulaire
+        rbf = Rbf(x_all, y_all, t_all, function='multiquadric', smooth=0.5)
+        grid_size = 500
+        xi, yi = np.meshgrid(np.linspace(-r_max, r_max, grid_size),
+                             np.linspace(-r_max, r_max, grid_size))
+        ti = rbf(xi, yi)
+        ti_filtered = gaussian_filter(ti, sigma=1.2)
         mask = xi**2 + yi**2 > r_max**2
-        ti_masked = np.ma.array(ti_reshaped, mask=mask)
+        ti_masked = np.ma.array(ti_filtered, mask=mask)
 
-        # --- 7. Affichage ---
-        # Définir vmin/vmax basé sur les données ajustées OU initiales
-        if fit_successful and popt is not None:
-            vmin = np.min(ti_masked) if ti_masked.count() > 0 else k_fit - 1
-            vmax = np.max(ti_masked) if ti_masked.count() > 0 else k_fit + A_fit + 1
-        else:
-            # Utiliser les valeurs calculées à partir de p0 si le fit a échoué
-            vmin = vmin_fail
-            vmax = vmax_fail
+        max_idx = np.unravel_index(np.nanargmax(ti_masked), ti_masked.shape)
+        x_laser, y_laser = xi[max_idx], yi[max_idx]
+        temp_peak = ti_masked[max_idx]
 
-        # Assurer vmin < vmax
-        if vmin >= vmax:
-            vmin = vmax - 1 # Ajustement simple pour éviter l'erreur dans contourf
+        contour = ax.contourf(xi, yi, ti_masked, levels=400, cmap="plasma")
+        fig.colorbar(contour, ax=ax, label="Température (°C)")
 
-        levels = np.linspace(vmin, vmax, 101)
+        ax.scatter(x, y, color='black', s=25)
+        ax.scatter(x_laser, y_laser, color='red', marker='x', s=80)
+        ax.annotate(f"x={x_laser:.1f}, y={y_laser:.1f}",
+                    (x_laser, y_laser),
+                    textcoords="offset points",
+                    xytext=(10, 10),
+                    fontsize=9,
+                    color='white',
+                    bbox=dict(boxstyle="round,pad=0.3", fc="black", alpha=0.7))
 
-        contour = ax.contourf(xi, yi, ti_masked, levels=levels, cmap="plasma", vmin=vmin, vmax=vmax, extend='both') # extend='both' gère les valeurs hors limites
-        try: # Ajout d'un try/except pour la colorbar qui peut échouer si vmin=vmax
-            fig.colorbar(contour, ax=ax, label="Température Estimée (°C)")
-        except ValueError as cbar_err:
-            print(f"[AVERTISSEMENT HEATMAP] Impossible d'afficher la colorbar: {cbar_err}")
+        for xi_, yi_, nom in zip(x, y, [self.positions[i][0] for i in self.indices_a_garder]):
+            ax.annotate(nom, (xi_, yi_), textcoords="offset points", xytext=(4, 4),
+                        ha='left', fontsize=8, color='white')
 
-        ax.scatter(x_orig, y_orig, color='black', marker='o', s=25, label='Thermistances')
-
-        # (Annotations et affichage du centre inchangés...)
-        for i, name in enumerate(names_orig):
-            ax.annotate(name, (x_orig[i], y_orig[i]), textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
-
-        if laser_pos_found and laser_x is not None and laser_y is not None:
-             if -r_max <= laser_x <= r_max and -r_max <= laser_y <= r_max:
-                ax.plot(laser_x, laser_y, 'go', markersize=10, label=laser_pos_label)
-             else:
-                print(f"[AVERTISSEMENT HEATMAP] Centre gaussien ({laser_x:.1f}, {laser_y:.1f}) hors limites d'affichage.")
-
-
-        # Configuration de l'axe
+        ax.set_title(f"Frame {index} | t = {timestamp} | Laser = {temp_peak:.1f}°C")
         ax.set_aspect('equal')
         title_ax = f"Heatmap Gaussienne 2D (Tps: {elapsed_time:.2f} s)" + title_suffix
         ax.set_title(title_ax, fontsize=9)
@@ -885,21 +761,5 @@ class TraitementDonnees:
 
 
 if __name__ == "__main__":
-    # Choisir True pour simulation, False pour connexion série réelle
-    MODE_SIMULATION = True
-
-    # Créer l'instance
-    td = TraitementDonnees(simulation=MODE_SIMULATION)
-
-    # Démarrer l'acquisition seulement si l'initialisation a réussi
-    # (connexion série ou chargement CSV/coeffs OK)
-    if td.est_connecte() or MODE_SIMULATION: # En simu, on tente même si le CSV a échoué au début
-         # Intervalle de rafraîchissement (secondes)
-         # Attention: Un intervalle trop court (< temps de lecture série/calcul)
-         # peut causer des problèmes. 0.05s est très rapide.
-         # Augmenter à 0.2s ou 0.5s pourrait être plus stable.
-         REFRESH_INTERVAL = 0.2
-         td.demarrer_acquisition_live(interval=REFRESH_INTERVAL)
-    else:
-         print("❌ Initialisation échouée. Impossible de démarrer l'acquisition.")
-
+    traitement = TraitementDonnees(simulation=True)
+    traitement.demarrer_acquisition_live(interval=1.0, utiliser_bords=True)
