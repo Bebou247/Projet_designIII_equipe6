@@ -10,6 +10,8 @@ from datetime import datetime
 import pandas as pd
 from pathlib import Path
 from scipy.ndimage import gaussian_filter
+import math
+
 
 class TraitementDonnees:
     VREF = 3.003
@@ -21,14 +23,17 @@ class TraitementDonnees:
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
 
-        # 🔁 R24 à l’ancienne position de R24 (canal 11), R12 supprimée
+        # Décalage à appliquer
+        decalage_x = -0.4  # vers la gauche
+        decalage_y = -0.2  # légèrement plus bas
+
         self.positions = [
-            ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
-            ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
-            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-4, -11.25)),
-            ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
-            ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
-            ("R21", (4.5, -8))
+            ("R1", (11 + decalage_x, 0 + decalage_y)), ("R2", (3 + decalage_x, 0 + decalage_y)), ("R3", (-3 + decalage_x, 0 + decalage_y)), ("R4", (-11 + decalage_x, 0 + decalage_y)),
+            ("R5", (8 + decalage_x, 2.5 + decalage_y)), ("R6", (0 + decalage_x, 2.5 + decalage_y)), ("R7", (-8 + decalage_x, 2.5 + decalage_y)), ("R8", (8 + decalage_x, 5.5 + decalage_y)),
+            ("R9", (0 + decalage_x, 5.5 + decalage_y)), ("R10", (-8 + decalage_x, 5.5 + decalage_y)), ("R11", (4.5 + decalage_x, 8 + decalage_y)), ("R24", (-3.5 + decalage_x, -11.25 + decalage_y)),
+            ("R13", (4 + decalage_x, 11.25 + decalage_y)), ("R14", (-4 + decalage_x, 11.25 + decalage_y)), ("R15", (8 + decalage_x, -2.5 + decalage_y)), ("R16", (0 + decalage_x, -2.5 + decalage_y)),
+            ("R17", (-8 + decalage_x, -2.5 + decalage_y)), ("R18", (8 + decalage_x, -5.5 + decalage_y)), ("R19", (0 + decalage_x, -5.5 + decalage_y)), ("R20", (-8 + decalage_x, -5.5 + decalage_y)),
+            ("R21", (4.5 + decalage_x, -8 + decalage_y)), ("R25", (0 + decalage_x, -11.5 + decalage_y))
         ]
         # J'ai changé tempo la pos de la R24 (-3.5, -11.25) Canaux 0 à 20 utilisés pour les thermistances R1-R11, R13-R21, R24(sur canal 11)
         self.indices_à_garder = list(range(21))
@@ -45,9 +50,10 @@ class TraitementDonnees:
                 # Chemin vers le fichier CSV relatif au script Test.py
                 script_dir = Path(__file__).parent
                 # Te permet de choisir quel fichier prendre
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 4.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 2.csv"
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
-                self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
+                #self.simulation_data = pd.read_csv(simulation_file_path, sep=';', decimal=',')
+                self.simulation_data = pd.read_csv(simulation_file_path)# Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
 
                 # Vérification des colonnes nécessaires
@@ -168,10 +174,7 @@ class TraitementDonnees:
         return voltages_dict
 
 
-    # Dans la classe TraitementDonnees
-    # Dans la classe TraitementDonnees (fichier Test.py)
-
-    # Dans la classe TraitementDonnees (fichier Test.py)
+   
 
     def get_temperatures(self):
         if self.simulation:
@@ -351,14 +354,6 @@ class TraitementDonnees:
         # Retourner le dictionnaire final
         return dict(zip(noms, final_temperatures))
 
-
-
-
-
-
-    # Dans la classe TraitementDonnees (fichier Test.py)
-
-    # Dans la classe TraitementDonnees (fichier Test2.py)
 
     def afficher_heatmap_dans_figure(self, temperature_dict, fig, elapsed_time):
         fig.clear() # Efface toute la figure précédente
