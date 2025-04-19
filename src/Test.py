@@ -20,35 +20,39 @@ class TraitementDonnees:
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
 
+        # Décalage à appliquer
+        decalage_x = -0.4  # vers la gauche
+        decalage_y = -0.2  # légèrement plus bas
+
         self.positions = [
-            ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
-            ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
-            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-3.5, -11.25)),
-            ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
-            ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
-            ("R21", (4.5, -8))
+            ("R1", (11 + decalage_x, 0 + decalage_y)), ("R2", (3 + decalage_x, 0 + decalage_y)), ("R3", (-3 + decalage_x, 0 + decalage_y)), ("R4", (-11 + decalage_x, 0 + decalage_y)),
+            ("R5", (8 + decalage_x, 2.5 + decalage_y)), ("R6", (0 + decalage_x, 2.5 + decalage_y)), ("R7", (-8 + decalage_x, 2.5 + decalage_y)), ("R8", (8 + decalage_x, 5.5 + decalage_y)),
+            ("R9", (0 + decalage_x, 5.5 + decalage_y)), ("R10", (-8 + decalage_x, 5.5 + decalage_y)), ("R11", (4.5 + decalage_x, 8 + decalage_y)), ("R24", (-3.5 + decalage_x, -11.25 + decalage_y)),
+            ("R13", (4 + decalage_x, 11.25 + decalage_y)), ("R14", (-4 + decalage_x, 11.25 + decalage_y)), ("R15", (8 + decalage_x, -2.5 + decalage_y)), ("R16", (0 + decalage_x, -2.5 + decalage_y)),
+            ("R17", (-8 + decalage_x, -2.5 + decalage_y)), ("R18", (8 + decalage_x, -5.5 + decalage_y)), ("R19", (0 + decalage_x, -5.5 + decalage_y)), ("R20", (-8 + decalage_x, -5.5 + decalage_y)),
+            ("R21", (4.5 + decalage_x, -8 + decalage_y)), ("R25", (0 + decalage_x, -11.5 + decalage_y))
         ]
-        self.indices_à_garder = list(range(21))
+
+        self.indices_a_garder = [i for i, (nom, _) in enumerate(self.positions) if nom != "R25"]
+        self.simulation_columns = [nom for i, (nom, _) in enumerate(self.positions) if i in self.indices_a_garder]
         self.simulation_data = None
         self.simulation_index = 0
-        self.simulation_columns = [self.positions[i][0] for i in self.indices_à_garder]
 
         if self.simulation:
             self.ser = None
             print("[SIMULATION] Mode simulation activé.")
             try:
-                simulation_file_path = Path(__file__).parent.parent / "data" / "Hauteur 1.csv"
-                self.simulation_data = pd.read_csv(simulation_file_path)
-                print(f"[SIMULATION] Chargement : {simulation_file_path.resolve()}")
+                simulation_file_path = Path(__file__).parent.parent / "data" / "10 W centre (hauteur 2 à 6).csv"
+                df = pd.read_csv(simulation_file_path, sep=";", decimal=",", engine="python")
+                df.dropna(axis=1, how='all', inplace=True)
 
-                missing = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
-                if missing:
-                    print(f"[ERREUR] Colonnes manquantes : {missing}")
-                    self.simulation_data = None
-                else:
-                    for col in self.simulation_columns:
-                        self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
-                    print(f"[SIMULATION] {len(self.simulation_data)} lignes chargées.")
+                idx_tref = df.columns.get_loc("T_ref")
+                self.simulation_columns = df.columns[:idx_tref].tolist()
+                self.simulation_data = df
+
+                print(f"[SIMULATION] Chargement : {simulation_file_path.resolve()}")
+                print(f"[SIMULATION] {len(self.simulation_data)} lignes chargées.")
+
             except Exception as e:
                 print(f"[ERREUR] Chargement simulation : {e}")
                 self.simulation_data = None
@@ -94,7 +98,7 @@ class TraitementDonnees:
         ax = fig.add_subplot(111)
 
         x, y, t = [], [], []
-        for i in self.indices_à_garder:
+        for i in self.indices_a_garder:
             name, (xi, yi) = self.positions[i]
             temp = temperature_dict.get(name, np.nan)
             if pd.notna(temp):
@@ -118,20 +122,27 @@ class TraitementDonnees:
             y_all = y + list(edge_y)
             t_all = t + edge_t
         else:
-            x_all = x
-            y_all = y
-            t_all = t
+            x_all = x[:]
+            y_all = y[:]
+            t_all = t[:]
 
-        rbf = Rbf(x_all, y_all, t_all, function='multiquadric', smooth=5.0, epsilon=3)
-        grid_size = 200
+        points_centre = [(-2, 2), (2, -2), (0, 0)]
+        temp_moy = np.mean(t)
+        for cx, cy in points_centre:
+            x_all.append(cx)
+            y_all.append(cy)
+            t_all.append(temp_moy - 0.5)
+
+        rbf = Rbf(x_all, y_all, t_all, function='multiquadric', smooth=0.5)
+        grid_size = 500
         xi, yi = np.meshgrid(np.linspace(-r_max, r_max, grid_size),
                              np.linspace(-r_max, r_max, grid_size))
         ti = rbf(xi, yi)
-        ti_filtered = gaussian_filter(ti, sigma=2)
+        ti_filtered = gaussian_filter(ti, sigma=1.2)
         mask = xi**2 + yi**2 > r_max**2
         ti_masked = np.ma.array(ti_filtered, mask=mask)
 
-        max_idx = np.unravel_index(np.argmax(ti_masked), ti_masked.shape)
+        max_idx = np.unravel_index(np.nanargmax(ti_masked), ti_masked.shape)
         x_laser, y_laser = xi[max_idx], yi[max_idx]
         temp_peak = ti_masked[max_idx]
 
@@ -148,7 +159,7 @@ class TraitementDonnees:
                     color='white',
                     bbox=dict(boxstyle="round,pad=0.3", fc="black", alpha=0.7))
 
-        for xi_, yi_, nom in zip(x, y, temperature_dict.keys()):
+        for xi_, yi_, nom in zip(x, y, [self.positions[i][0] for i in self.indices_a_garder]):
             ax.annotate(nom, (xi_, yi_), textcoords="offset points", xytext=(4, 4),
                         ha='left', fontsize=8, color='white')
 
@@ -196,5 +207,5 @@ class TraitementDonnees:
             plt.close()
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=True)
-    td.demarrer_acquisition_live(real_interval_csv=0.1, utiliser_bords=True)
+    traitement = TraitementDonnees(simulation=True)
+    traitement.demarrer_acquisition_live(interval=1.0, utiliser_bords=True)

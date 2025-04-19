@@ -274,6 +274,6 @@ class TraitementDonnees:
         print("-" * 80)
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=True)
+    td = TraitementDonnees(simulation=False)
     #td.afficher_coefficients_thermistances()
     td.demarrer_acquisition_live(interval=0.05)
