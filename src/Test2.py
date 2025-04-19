@@ -45,7 +45,7 @@ class TraitementDonnees:
                 # Chemin vers le fichier CSV relatif au script Test.py
                 script_dir = Path(__file__).parent
                 # Te permet de choisir quel fichier prendre
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 4.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 2.csv"
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
                 self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -210,71 +210,6 @@ class TraitementDonnees:
                     temperature_dict["R24"] = average_temp_sim
                 elif "R24" in temperature_dict:
                     temperature_dict["R24"] = np.nan
-
-                # --- LOGIQUE POUR BOOSTER R24 (SIMULATION) ---
-                # 3. Calcul de la moyenne SANS R19, R20, R24 pour les conditions
-                temps_for_check_sim = []
-                r19_temp_sim = temperature_dict.get("R19", np.nan)
-                r20_temp_sim = temperature_dict.get("R20", np.nan)
-                r16_temp_sim = temperature_dict.get("R16", np.nan) # << NOUVEAU: Obtenir R16
-                r24_temp_sim = temperature_dict.get("R24", np.nan)
-                r3_temp_sim = temperature_dict.get("R3", np.nan)
-                r18_temp_sim = temperature_dict.get("R18", np.nan)
-                r21_temp_sim = temperature_dict.get("R21", np.nan)
-
-                for name, temp in temperature_dict.items():
-                    if pd.notna(temp) and name not in ["R19"]: # Exclut aussi R16 implicitement si R16 est dans la liste
-                        temps_for_check_sim.append(temp)
-
-                # 4. Vérifier les conditions et appliquer les boosts si nécessaire
-                if temps_for_check_sim: # S'il y a d'autres températures valides
-                    average_for_check_sim = np.mean(temps_for_check_sim)
-
-                    # --- Condition 1 (existante, boost 1.08) ---
-                    condition_1_met = (
-                        pd.notna(r19_temp_sim) and
-                        pd.notna(r20_temp_sim) and
-                        r19_temp_sim > (average_for_check_sim * 1.12) and
-                        r20_temp_sim > (average_for_check_sim * 1.08) and
-                        r3_temp_sim > (average_for_check_sim * 1.05)
-                    )
-
-                    if condition_1_met and pd.notna(r24_temp_sim):
-                        boosted_r24_temp = r24_temp_sim * 1.10
-                        temperature_dict["R24"] = boosted_r24_temp
-                        r24_temp_sim = boosted_r24_temp # Mettre à jour pour la condition suivante
-                        # print(f"[SIM BOOST 1 R24] Boost 1.08 appliqué")
-
-                    # --- Condition 2 (NOUVELLE, boost 1.20) ---
-                    condition_2_met = (
-                        pd.notna(r19_temp_sim) and
-                        pd.notna(r16_temp_sim) and
-                        r19_temp_sim >= (average_for_check_sim * 1.21) and # R19 >= 120%
-                        r16_temp_sim <= (average_for_check_sim * 1.10) and
-                        r18_temp_sim <= (average_for_check_sim * 1.02)# R16 <= 118%
-                    )
-
-                    if condition_2_met and pd.notna(r24_temp_sim):
-                        boosted_r24_temp_2 = r24_temp_sim * 1.13 # Applique le boost 1.20 (écrase le 1.08 si besoin)
-                        temperature_dict["R24"] = boosted_r24_temp_2
-                        # print(f"[SIM BOOST 2 R24] Boost 1.20 appliqué")
-                        # print(f"    Cond 2: R19={r19_temp_sim:.2f} (>= {average_for_check_sim*1.20:.2f}), R16={r16_temp_sim:.2f} (<= {average_for_check_sim*1.18:.2f})")
-                    
-                    condition_3_met = (
-                        pd.notna(r18_temp_sim) and
-                        pd.notna(r21_temp_sim) and
-                        r18_temp_sim >= (average_for_check_sim * 1.12) and
-                        r21_temp_sim >= (average_for_check_sim * 1.12)
-                    )
-
-                    if condition_3_met and pd.notna(r18_temp_sim) and pd.notna(r21_temp_sim ):
-                        boosted_r21_temp = r21_temp_sim * 1.05
-                        boosted_r18_temp = r18_temp_sim * 1.15
-                        temperature_dict["R21"] = boosted_r21_temp
-                        temperature_dict["R18"] = boosted_r18_temp
-
-                # --- FIN LOGIQUE POUR BOOSTER R24 ---
-
                 return temperature_dict
             else:
                 # Fallback: Génération aléatoire (inchangé)
@@ -551,35 +486,40 @@ class TraitementDonnees:
 
     # Dans la classe TraitementDonnees (fichier Test.py)
 
+    # Dans la classe TraitementDonnees (fichier Test2.py)
+
     def demarrer_acquisition_live(self, interval=0.2):
         if not self.est_connecte() and not self.simulation:
             print("Arduino non connecté.")
             return
 
-        print("🚀 Acquisition live en cours... (Ctrl+C pour arrêter)")
-        # --- MODIFICATION ICI: Figure plus large ---
-        fig = plt.figure(figsize=(12, 6)) # Augmenter la largeur (ex: 12 pouces)
-        # -----------------------------------------
+        print("🚀 Acquisition live en cours... (Fermez la fenêtre pour arrêter ou Ctrl+C)")
+        fig = plt.figure(figsize=(7, 6)) # Taille ajustée pour un seul plot
         plt.ion()
         fig.show()
 
         all_data = []
-        # Utiliser les noms de colonnes définis dans __init__ pour le CSV si en mode simulation
         if self.simulation:
-             # Assure-toi que les headers correspondent bien aux données que tu veux sauvegarder
-             headers = self.simulation_columns + ["T_ref", "timestamp", "temps_ecoule_s"]
+            headers = self.simulation_columns + ["T_ref", "timestamp", "temps_ecoule_s"]
         else:
-             headers = [self.positions[i][0] for i in self.indices_à_garder] + ["T_ref", "timestamp", "temps_ecoule_s"]
-
+            headers = [self.positions[i][0] for i in self.indices_à_garder] + ["T_ref", "timestamp", "temps_ecoule_s"]
 
         start_time = time.time()
+        keep_running = True # Variable pour contrôler la boucle
         try:
-            while True:
+            # --- MODIFICATION ICI: Condition de la boucle ---
+            # On vérifie si la figure existe toujours
+            while keep_running and plt.fignum_exists(fig.number):
                 current_time = time.time()
                 elapsed_time = current_time - start_time
                 data = self.get_temperatures()
 
                 if data:
+                    # --- Vérification supplémentaire si la fenêtre est toujours là AVANT d'afficher ---
+                    if not plt.fignum_exists(fig.number):
+                        keep_running = False
+                        break # Sortir immédiatement si fermée avant l'affichage
+
                     os.system("clear") # ou 'cls' sur Windows
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
@@ -589,63 +529,78 @@ class TraitementDonnees:
                     valid_temps_count = 0
                     for name, temp in data.items():
                         if pd.notna(temp):
-                             print(f"{name:<6} : {temp:6.2f} °C")
-                             valid_temps_count += 1
+                            print(f"{name:<6} : {temp:6.2f} °C")
+                            valid_temps_count += 1
                         else:
-                             print(f"{name:<6} :   --   °C (NaN)")
+                            print(f"{name:<6} :   --   °C (NaN)")
                     print(f"({valid_temps_count}/{len(self.indices_à_garder)} thermistances valides)")
                     print("=" * 60)
 
-                    # L'appel reste le même, la fonction interne gère les 2 plots
+                    # Affichage de la heatmap
                     self.afficher_heatmap_dans_figure(data, fig, elapsed_time)
                     fig.canvas.draw()
                     fig.canvas.flush_events()
 
-                    # Préparer la ligne pour le CSV
+                    # Préparer la ligne pour le CSV (inchangé)
                     ligne = []
                     for header_name in headers:
                         if header_name == "T_ref":
-                            ligne.append(25.0) # Valeur T_ref fixe
+                            ligne.append(25.0)
                         elif header_name == "timestamp":
                             ligne.append(datetime.now().isoformat(timespec='seconds'))
                         elif header_name == "temps_ecoule_s":
                             ligne.append(round(elapsed_time, 3))
                         elif header_name in data:
                             temp_value = data[header_name]
-                            ligne.append(temp_value if pd.notna(temp_value) else '') # NaN -> ''
+                            ligne.append(temp_value if pd.notna(temp_value) else '')
                         else:
-                            # Gérer le cas où un header n'est pas dans les données (devrait moins arriver maintenant)
                             ligne.append('')
                     all_data.append(ligne)
 
-
                 else:
-                    # Affichage si données incomplètes
-                    os.system("clear") # ou 'cls' sur Windows
+                    # Affichage si données incomplètes (inchangé)
+                    os.system("clear")
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
                     print("⚠️ Données incomplètes ou non reçues.")
                     print("=" * 60)
 
+                # --- Vérification si la fenêtre est toujours là APRÈS la pause ---
+                if not plt.fignum_exists(fig.number):
+                    keep_running = False
+                    break # Sortir si fermée pendant la pause
 
                 time.sleep(interval)
 
         except KeyboardInterrupt:
-            print("\n🛑 Acquisition stoppée. Sauvegarde du fichier CSV...")
-            # ... (code de sauvegarde CSV inchangé) ...
-            desktop_path = Path.home() / "Desktop"
-            filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            csv_path = desktop_path / filename
+            print("\n🛑 Acquisition stoppée par Ctrl+C.")
+            keep_running = False # Assure la sortie propre
+        finally:
+            # --- Code exécuté à la fin (fermeture fenêtre ou Ctrl+C) ---
+            print("\n🛑 Fin de l'acquisition.")
+            if plt.fignum_exists(fig.number): # Fermer la fenêtre si elle est encore ouverte (ex: après Ctrl+C)
+                plt.close(fig)
 
-            try:
-                with open(csv_path, mode='w', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(headers) # Utiliser les headers définis au début
-                    writer.writerows(all_data)
-                print(f"✅ Données sauvegardées dans : {csv_path}")
-            except Exception as e:
-                print(f"❌ Erreur lors de la sauvegarde du CSV : {e}")
+            # Sauvegarde CSV si des données ont été collectées
+            if all_data:
+                print("💾 Sauvegarde du fichier CSV...")
+                desktop_path = Path.home() / "Desktop"
+                filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                csv_path = desktop_path / filename
+                try:
+                    with open(csv_path, mode='w', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(headers)
+                        writer.writerows(all_data)
+                    print(f"✅ Données sauvegardées dans : {csv_path}")
+                except Exception as e:
+                    print(f"❌ Erreur lors de la sauvegarde du CSV : {e}")
+            else:
+                print("ℹ️ Aucune donnée à sauvegarder.")
+
+# --- Le reste de la classe reste inchangé ---
+
 
 
 # --- Le reste du fichier reste inchangé ---
