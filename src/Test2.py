@@ -25,7 +25,7 @@ class TraitementDonnees:
         self.positions = [
             ("R1", (11, 0)), ("R2", (3, 0)), ("R3", (-3, 0)), ("R4", (-11, 0)),
             ("R5", (8, 2.5)), ("R6", (0, 2.5)), ("R7", (-8, 2.5)), ("R8", (8, 5.5)),
-            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-3.5, -11.25)),
+            ("R9", (0, 5.5)), ("R10", (-8, 5.5)), ("R11", (4.5, 8)), ("R24", (-4, -11.25)),
             ("R13", (4, 11.25)), ("R14", (-4, 11.25)), ("R15", (8, -2.5)), ("R16", (0, -2.5)),
             ("R17", (-8, -2.5)), ("R18", (8, -5.5)), ("R19", (0, -5.5)), ("R20", (-8, -5.5)),
             ("R21", (4.5, -8))
@@ -45,7 +45,7 @@ class TraitementDonnees:
                 # Chemin vers le fichier CSV relatif au script Test.py
                 script_dir = Path(__file__).parent
                 # Te permet de choisir quel fichier prendre
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 2.csv"
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 4.csv"
                 # Lecture du CSV, essayez différents séparateurs si nécessaire (ex: sep=';')
                 self.simulation_data = pd.read_csv(simulation_file_path) # Adaptez le séparateur si besoin: sep=';'
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -599,11 +599,7 @@ class TraitementDonnees:
             else:
                 print("ℹ️ Aucune donnée à sauvegarder.")
 
-# --- Le reste de la classe reste inchangé ---
 
-
-
-# --- Le reste du fichier reste inchangé ---
 
 
 
