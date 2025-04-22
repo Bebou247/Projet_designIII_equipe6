@@ -12,19 +12,6 @@ import pandas as pd
 from pathlib import Path
 from scipy.ndimage import gaussian_filter
 import math
-import serial
-import numpy as np
-from scipy.interpolate import Rbf
-import re
-import time
-import matplotlib.pyplot as plt
-import os
-import csv
-from datetime import datetime
-import pandas as pd
-from pathlib import Path
-from scipy.ndimage import gaussian_filter
-import math
 from functools import reduce
 
 
@@ -32,11 +19,12 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem14201",path = "data", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem14201",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.path = path
         self.port = port
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
+        self.puissance = 0
 
         self.correction_matrices = [pd.read_csv(self.path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
         self.photodiode_ratios_450 = [pd.read_csv(self.path + "ratios_photodiodes_450.csv", sep=';', decimal=',')[col].values
@@ -66,6 +54,7 @@ class TraitementDonnees:
 
         self.indices_à_garder = list(range(21)) # R1-R11, R13-R21 (R24 est sur canal 11)
         # self.indices_à_garder.append(24) # Si R25 est lue
+        self.indices_photodiodes = list(range(25, 31))
 
         self.simulation_data = None
         self.simulation_index = 150
@@ -168,6 +157,7 @@ class TraitementDonnees:
 
         self.ser.reset_input_buffer()
         voltages_dict = {}
+        photodiodes_dict = {}
         start_time = time.time()
         timeout_sec = 2 # Augmenté légèrement pour la robustesse
 
@@ -199,6 +189,14 @@ class TraitementDonnees:
                              except ValueError:
                                  print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
                                  voltages_dict[canal] = np.nan
+
+                        if canal in self.indices_photodiodes:
+                             try:
+                                 photodiodes_dict[canal] = float(match.group(2))
+                                 # print(f"[DEBUG] Reçu Canal {canal}: {voltages_dict[canal]} V") # Debug
+                             except ValueError:
+                                 print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
+                                 photodiodes_dict[canal] = np.nan
                 else:
                     # Petite pause pour ne pas saturer le CPU si rien n'est reçu
                     time.sleep(0.01)
@@ -226,6 +224,15 @@ class TraitementDonnees:
              return None # Préférable de retourner None si incomplet
 
         # print(f"[DEBUG] Données lues avec succès: {len(voltages_dict)} canaux.") # Debug
+
+        data_phot = []
+
+        for k, v in photodiodes_dict.items():
+            data_phot.append(v)
+            print(v)
+
+        self.data_photodiodes = data_phot
+
         return voltages_dict
 
     def get_temperatures(self):
@@ -875,27 +882,37 @@ class TraitementDonnees:
                 if self.photodiode_tensions_976[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
         return np.mean(V_ratio)
 
-    def get_wavelength(self, position, V_photodiodes, puissance, threshold=0.1, threshold_mult=1.25):
-        pos = self.id_pos(position)
+    def get_wavelength(self,threshold=0.1, threshold_mult=1.25):
+        y, x = self.last_valid_raw_pos
+
+        if x is None or y is None:
+            y = 0
+            x = 0
+
+        pos = self.id_pos((x, y))
+
+        V_photodiodes = self.data_photodiodes
+
         V_corr = np.array([V * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
         index_max = np.argmax(V_corr)
+
         if all(V < 0.1 for V in V_corr):
-            return "Unknown", 0, puissance
+            return "Unknown", 0, self.puissance
         elif index_max == 0:
-            return "UV", -200, puissance
+            return "UV", -200, self.puissance
         elif index_max == 1:
-            wavelength = np.mean(self.precise_wavelength(self.get_visible_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
-            return "VIS", wavelength, self.get_VIS_power(wavelength, V_corr)
+            self.wavelength = np.mean(self.precise_wavelength(self.get_visible_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
+            return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
         elif index_max == 5:
-            wavelength = np.mean(self.precise_wavelength(self.get_IR_wavelength, V_corr[-1], puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
-            return "IR", wavelength, puissance
+            self.wavelength = np.mean(self.precise_wavelength(self.get_IR_wavelength, V_corr[-1], self.puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
+            return "IR", self.wavelength, self.puissance
         else:
-            wavelength = np.mean(self.precise_wavelength(self.get_NIR_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
-            return "NIR", wavelength, self.get_NIR_power(wavelength, V_corr)
+            self.wavelength = np.mean(self.precise_wavelength(self.get_NIR_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
+            return "NIR", self.wavelength, self.get_NIR_power(self.wavelength, V_corr)
 
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=F)
+    td = TraitementDonnees(simulation=True)
     td.demarrer_acquisition_live(interval=0.1)
     puissance_estimee = 0.75  # en Watts (exemple arbitraire)
 
@@ -905,6 +922,6 @@ if __name__ == "__main__":
     #     puissance=puissance_estimee
     # )
 
-    print(f"Résultat : {type_lumiere} | λ = {lambda_nm:.1f} nm | Puissance corrigée = {puissance_corrigee:.2f} W")
+    # print(f"Résultat : {type_lumiere} | λ = {lambda_nm:.1f} nm | Puissance corrigée = {puissance_corrigee:.2f} W")
 
     
