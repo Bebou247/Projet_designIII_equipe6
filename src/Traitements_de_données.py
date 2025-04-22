@@ -25,6 +25,7 @@ class TraitementDonnees:
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
         self.puissance = 0
+        self.data_photodiodes = [0,0,0,0,0,0]
 
         self.correction_matrices = [pd.read_csv(self.path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
         self.photodiode_ratios_450 = [pd.read_csv(self.path + "ratios_photodiodes_450.csv", sep=';', decimal=',')[col].values
@@ -51,6 +52,8 @@ class TraitementDonnees:
             # --- NOUVELLE THERMISTANCE VIRTUELLE ---
             ("R_Virtuel", (-4.9, 7.8))
         ]
+
+        self.photoidodes = ["PD25","PD26","PD27","PD28","PD29","PD30"]
 
         self.indices_à_garder = list(range(21)) # R1-R11, R13-R21 (R24 est sur canal 11)
         # self.indices_à_garder.append(24) # Si R25 est lue
@@ -237,6 +240,7 @@ class TraitementDonnees:
 
     def get_temperatures(self):
         real_temps_dict = {} # Dictionnaire pour les températures réelles
+        real_tension_dict = {} # Dictionnaire pour les tensions réelles
 
         if self.simulation:
             # --- Logique Simulation CSV ---
@@ -272,6 +276,15 @@ class TraitementDonnees:
                          else:
                              real_temps_dict["R25"] = np.nan
 
+                for i, name in enumerate(self.photodiodes):
+                    if name in self.simulation_columns:
+                        if name in current_data_row and pd.notna(current_data_row[name]):
+                            real_tension_dict[name] = current_data_row[name]
+                            valid_data_found = True
+                        else:
+                            real_tension_dict[name] = 0 # Mettre NaN si absent ou non numérique
+
+
                 # Si aucune donnée valide n'a été trouvée (hors R24/Virtuelle)
                 if not valid_data_found:
                     print(f"[AVERTISSEMENT SIMULATION] Aucune donnée valide (hors R24/Virtuelle) à l'index CSV {self.simulation_index - 1}.")
@@ -293,6 +306,9 @@ class TraitementDonnees:
                     # Exclure R25 et celles avec poids spécifique, et vérifier validité
                     if name != "R25" and name not in thermistors_r24_weights and pd.notna(temp):
                          other_thermistors_for_r24.append(name)
+
+                for name, tension in real_tension_dict.items():
+                    pass
 
                 # Calculer le poids pour les "autres" thermistances (pour R24)
                 weight_per_other_r24 = 0.0
@@ -882,7 +898,7 @@ class TraitementDonnees:
                 if self.photodiode_tensions_976[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
         return np.mean(V_ratio)
 
-    def get_wavelength(self,threshold=0.1, threshold_mult=1.25):
+    def get_wavelength(self, threshold=0.1, threshold_mult=1.25):
         y, x = self.last_valid_raw_pos
 
         if x is None or y is None:
