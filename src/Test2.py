@@ -18,7 +18,7 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem14201", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="COM4", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.port = port
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
@@ -29,10 +29,10 @@ class TraitementDonnees:
 
         self.positions = [
             ("R1", (11 + decalage_x, 0 + decalage_y)), ("R2", (3 + 1, 0 + decalage_y)), ("R3", (-3 + decalage_x, 0 + decalage_y)), ("R4", (-11 + decalage_x, 0 + decalage_y)),
-            ("R5", (8 + decalage_x, 2.5 + decalage_y)), ("R6", (0 + decalage_x, 2.5 + decalage_y)), ("R7", (-8 + decalage_x, 2.5 + decalage_y)), ("R8", (8 + decalage_x, 5.5 + decalage_y)),
+            ("R5", (8 + 1, 2.5 - decalage_y)), ("R6", (0 + decalage_x, 2.5 + decalage_y)), ("R7", (-8 + decalage_x, 2.5 + decalage_y)), ("R8", (8 + 1, 5.5 - decalage_y)),
             ("R9", (0 + decalage_x, 5.5 + decalage_y)), ("R10", (-8 + decalage_x, 5.5 + decalage_y)), ("R11", (4.5 + decalage_x, 8 + decalage_y)), ("R24", (-3.5 + decalage_x, -11.25 + decalage_y)), # Note: R24 est sur le canal 11 physiquement
-            ("R13", (4 + decalage_x, 11.25 + decalage_y)), ("R14", (-4 + decalage_x, 11.25 + decalage_y)), ("R15", (8 + decalage_x, -2.5 + decalage_y)), ("R16", (0 + decalage_x, -2.5 + decalage_y)),
-            ("R17", (-8 + decalage_x, -2.5 + decalage_y)), ("R18", (8 + decalage_x, -5.5 + decalage_y)), ("R19", (0 + decalage_x, -5.5 + decalage_y)), ("R20", (-8 + decalage_x, -5.5 + decalage_y)),
+            ("R13", (4 + decalage_x, 11.25 + decalage_y)), ("R14", (-4 + decalage_x, 11.25 + decalage_y)), ("R15", (8 + 1, -2.5 - decalage_y)), ("R16", (0 + decalage_x, -2.5 + decalage_y)),
+            ("R17", (-8 + decalage_x, -2.5 + decalage_y)), ("R18", (8 + 1, -5.5 - decalage_y)), ("R19", (0 + decalage_x, -5.5 + decalage_y)), ("R20", (-8 + decalage_x, -5.5 + decalage_y)),
             ("R21", (4.5 + decalage_x, -8 + decalage_y)), ("R25", (0 + decalage_x, -11.5 + decalage_y)), # R25 est la référence, souvent sur canal 24
             # --- NOUVELLE THERMISTANCE VIRTUELLE ---
             ("R_Virtuel", (-4.9, 7.8))
@@ -42,7 +42,7 @@ class TraitementDonnees:
         # self.indices_à_garder.append(24) # Si R25 est lue
 
         self.simulation_data = None
-        self.simulation_index = 0
+        self.simulation_index = 150
         self.simulation_columns = [p[0] for i, p in enumerate(self.positions) if p[0] != "R_Virtuel" and i in self.indices_à_garder]
         if "R25" in [p[0] for p in self.positions] and 24 not in self.indices_à_garder:
              if any(p[0] == "R25" for p in self.positions):
@@ -51,15 +51,26 @@ class TraitementDonnees:
         # --- AJOUT : Pour stocker la carte de température précédente ---
         self.previous_ti_filtered = None
         # --- FIN AJOUT ---
+        # --- AJOUT : Pour stocker la carte de température précédente ---
+        self.previous_ti_filtered = None
+        # --- FIN AJOUT ---
 
+        # --- AJOUT : Pour le filtrage de position ---
+        self.position_history = [] # Historique pour la médiane mobile
+        self.history_length = 5    # Nombre de positions à garder (ajustable)
+        self.last_valid_raw_pos = None # Dernière position brute jugée valide (pour limite vitesse)
+        self.last_filtered_pos = (None, None) # Dernière position filtrée (pour affichage)
+        self.max_speed_mm_per_interval = 3.0 # Max déplacement en mm entre frames (ajustable)
+        self.min_heating_threshold = 0.05
+        # --- FIN AJOUT ---
         if self.simulation:
             self.ser = None
             print("[SIMULATION] Mode simulation activé.")
             try:
                 script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "10 W centre (hauteur 2 à 6).csv"
-                #self.simulation_data = pd.read_csv(simulation_file_path)
-                self.simulation_data = pd.read_csv(simulation_file_path, sep = ';', decimal = ',')
+                simulation_file_path = script_dir.parent / "data" / "Hauteur 3.csv"
+                self.simulation_data = pd.read_csv(simulation_file_path)
+                #self.simulation_data = pd.read_csv(simulation_file_path, sep = ';', decimal = ',')
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
 
                 missing_cols = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
@@ -145,6 +156,7 @@ class TraitementDonnees:
             try:
                 if self.ser.in_waiting > 0:
                     line = self.ser.readline().decode(errors='ignore').strip()
+                    print(f"[DEBUG RAW] Reçu: '{line}'")
                     if not line:
                         continue
 
@@ -204,7 +216,7 @@ class TraitementDonnees:
                 # Lire la ligne actuelle
                 current_data_row = self.simulation_data.iloc[self.simulation_index]
                 # Incrémenter pour la prochaine lecture (peut être ajusté)
-                self.simulation_index += 5 # Lire chaque ligne
+                self.simulation_index += 2 # Lire chaque ligne
                 valid_data_found = False
 
                 # Lire les températures simulées pour les thermistances réelles (SAUF R24 pour l'instant)
@@ -471,14 +483,14 @@ class TraitementDonnees:
 
     def afficher_heatmap_dans_figure(self, temperature_dict, fig, elapsed_time):
         fig.clear()
-        ax1 = fig.add_subplot(121) # Heatmap Température
-        ax2 = fig.add_subplot(122) # Heatmap Magnitude Gradient
-        is_sharp_enough = False
+        # --- MODIFIÉ : Un seul subplot pour le gradient ---
+        ax = fig.add_subplot(111) # Heatmap Magnitude Gradient
+
         x_all_points, y_all_points, t_all_points = [], [], []
         valid_temps_list = []
-        thermistor_data_for_plot = []
+        thermistor_data_for_plot = [] # Gardé pour le calcul de baseline et RBF
 
-        # 1. Collecter points valides (réels + virtuel) SAUF R25
+        # 1. Collecter points valides (réels + virtuel) SAUF R25 (INCHANGÉ)
         for name, pos in self.positions:
             if name == "R25": continue
             temp_val = temperature_dict.get(name, np.nan)
@@ -487,17 +499,17 @@ class TraitementDonnees:
                 y_all_points.append(pos[1])
                 t_all_points.append(temp_val)
                 valid_temps_list.append(temp_val)
+                # Garder les données pour RBF même si on n'affiche pas les points sur ce graphe
                 thermistor_data_for_plot.append({"name": name, "pos": pos, "temp": temp_val})
 
-        # 2. Calculer baseline (basée sur points valides hors R25)
+        # 2. Calculer baseline (basée sur points valides hors R25) (INCHANGÉ)
         if not valid_temps_list:
             baseline_temp = 20.0
             print("[AVERTISSEMENT HEATMAP] Aucune donnée valide (hors R25) pour calculs.")
         else:
-            avg_temp = np.mean(valid_temps_list)
             baseline_temp = min(valid_temps_list) - 0.5
 
-        # --- Section Interpolation RBF ---
+        # --- Section Interpolation RBF (INCHANGÉ) ---
         r_max = 12.5
         num_edge_points = 12
         edge_angles = np.linspace(0, 2 * np.pi, num_edge_points, endpoint=False)
@@ -509,24 +521,26 @@ class TraitementDonnees:
         y_combined = y_all_points + list(edge_y)
         t_combined = t_all_points + edge_t
 
-        # Initialisations
+        # Initialisations (INCHANGÉ)
         ti_filtered = None
         xi, yi = None, None
         mask = None
-        grad_magnitude = None # Carte du gradient non masquée
-        grad_magnitude_masked = None # Carte du gradient masquée pour affichage
-        laser_x, laser_y = None, None
-        laser_pos_found = False
+        grad_magnitude = None
+        grad_magnitude_masked = None
+        raw_laser_x, raw_laser_y = None, None
+        raw_pos_found_this_frame = False
+        final_laser_pos_found = False
 
         if len(x_combined) < 3:
             print("[ERREUR HEATMAP] Pas assez de points (hors R25) pour l'interpolation RBF.")
-            ax1.set_title("Pas assez de données (hors R25) pour RBF")
-            ax2.set_title("Gradient non calculable")
-            # ... (affichage points si erreur) ...
+            # --- MODIFIÉ : Titre pour le seul axe ---
+            ax.set_title("Pas assez de données (hors R25) pour RBF/Gradient")
+            # Optionnel: Afficher les points sur cet axe si erreur
+            # for item in thermistor_data_for_plot: ...
             return
 
         try:
-            # --- Calcul RBF et Filtre Température ---
+            # --- Calcul RBF et Filtre Température (INCHANGÉ) ---
             rbf = Rbf(x_combined, y_combined, t_combined, function='multiquadric', smooth=0.5)
             grid_size = 200
             xi, yi = np.meshgrid(
@@ -537,140 +551,149 @@ class TraitementDonnees:
             sigma_filter_temp = 1.2
             ti_filtered = gaussian_filter(ti, sigma=sigma_filter_temp)
             mask = xi**2 + yi**2 > r_max**2
-            ti_masked = np.ma.array(ti_filtered, mask=mask)
+            # ti_masked = np.ma.array(ti_filtered, mask=mask) # Plus nécessaire pour l'affichage direct
 
-            # --- Calcul du Gradient Spatial ---
+            # --- Calcul du Gradient Spatial (INCHANGÉ) ---
             grad_y, grad_x = np.gradient(ti_filtered)
-            grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) # Garder la version non masquée pour la recherche
-            grad_magnitude_masked = np.ma.array(grad_magnitude, mask=mask) # Pour l'affichage
+            grad_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+            grad_magnitude_masked = np.ma.array(grad_magnitude, mask=mask)
 
-            # --- Calcul Position Laser (Maximum Différence Temporelle -> Minimum Gradient Local) ---
+            # --- Calcul Position Laser (Max Diff -> Min Grad Local + Filtres) (INCHANGÉ) ---
             if self.previous_ti_filtered is not None and self.previous_ti_filtered.shape == ti_filtered.shape:
-                # 1. Calculer la différence temporelle
                 difference_map = ti_filtered - self.previous_ti_filtered
-
-                # 2. Filtrer la différence
-                sigma_diff_filter = 2.0 # Filtre plus large pour la différence
+                sigma_diff_filter = 1.5
                 filtered_difference_map = gaussian_filter(difference_map, sigma=sigma_diff_filter)
-
-                # 3. Trouver le maximum de la différence filtrée (zone de chauffe)
                 filtered_difference_map_masked = np.ma.array(filtered_difference_map, mask=mask)
                 try:
-                    # Utiliser filled(np.nan) pour que nanargmax ignore les zones masquées
                     max_diff_idx_flat = np.nanargmax(filtered_difference_map_masked.filled(np.nan))
                     max_diff_idx = np.unravel_index(max_diff_idx_flat, filtered_difference_map_masked.shape)
+                    max_diff_val = filtered_difference_map_masked[max_diff_idx]
 
-                    # 4. Définir une zone de recherche autour du max de la différence
-                    search_radius_pixels = 30 # Rayon en pixels (à ajuster si besoin)
-                    rows, cols = np.indices(grad_magnitude.shape)
-                    dist_sq_from_max_diff = (rows - max_diff_idx[0])**2 + (cols - max_diff_idx[1])**2
-                    in_search_area = dist_sq_from_max_diff <= search_radius_pixels**2
-
-                    # 5. Trouver le minimum du gradient DANS la zone de recherche
-                    # Créer une carte temporaire pour la recherche : NaN en dehors de la zone et du cercle
-                    grad_search_map = grad_magnitude.copy()
-                    grad_search_map[~in_search_area | mask] = np.nan # Masquer hors zone OU hors cercle
-
-                    # Trouver le minimum dans cette carte spécifique
-                    min_grad_idx_flat = np.nanargmin(grad_search_map)
-
-                    # Vérifier si un minimum valide a été trouvé (pas NaN)
-                    if not np.isnan(grad_search_map.flat[min_grad_idx_flat]):
-                        min_grad_idx = np.unravel_index(min_grad_idx_flat, grad_search_map.shape)
-                        laser_x = xi[min_grad_idx]
-                        laser_y = yi[min_grad_idx]
-                        laser_pos_found = True
+                    if max_diff_val < self.min_heating_threshold:
+                        raw_pos_found_this_frame = False
                     else:
-                        print("[AVERTISSEMENT LASER] Aucun minimum de gradient trouvé dans la zone de recherche.")
-                        laser_pos_found = False
+                        search_radius_pixels = 20
+                        rows, cols = np.indices(grad_magnitude.shape)
+                        dist_sq_from_max_diff = (rows - max_diff_idx[0])**2 + (cols - max_diff_idx[1])**2
+                        in_search_area = dist_sq_from_max_diff <= search_radius_pixels**2
+                        grad_search_map = grad_magnitude.copy()
+                        grad_search_map[~in_search_area | mask] = np.nan
+                        min_grad_idx_flat = np.nanargmin(grad_search_map)
 
-                except ValueError: # Peut arriver si filtered_difference_map_masked est entièrement masqué/NaN
-                    print("[AVERTISSEMENT LASER] Impossible de trouver le maximum de la différence temporelle.")
-                    laser_pos_found = False
+                        if not np.isnan(grad_search_map.flat[min_grad_idx_flat]):
+                            min_grad_idx = np.unravel_index(min_grad_idx_flat, grad_search_map.shape)
+                            potential_laser_x = xi[min_grad_idx]
+                            potential_laser_y = yi[min_grad_idx]
+                            distance_from_center = math.sqrt(potential_laser_x**2 + potential_laser_y**2)
+                            max_allowed_distance = 9.5
+                            is_within_radius = distance_from_center <= max_allowed_distance
+                            is_plausible_move = True
+                            if self.last_valid_raw_pos is not None and is_within_radius:
+                                prev_x, prev_y = self.last_valid_raw_pos
+                                dist_moved_sq = (potential_laser_x - prev_x)**2 + (potential_laser_y - prev_y)**2
+                                if dist_moved_sq > self.max_speed_mm_per_interval**2:
+                                    is_plausible_move = False
+                                    # print(f"[INFO LASER] Position brute ({potential_laser_x:.1f}, {potential_laser_y:.1f}) rejetée : déplacement trop rapide.")
+
+                            if is_within_radius and is_plausible_move:
+                                raw_laser_x = potential_laser_x
+                                raw_laser_y = potential_laser_y
+                                raw_pos_found_this_frame = True
+                                self.last_valid_raw_pos = (raw_laser_x, raw_laser_y)
+                            else:
+                                raw_pos_found_this_frame = False
+                                # if not is_within_radius:
+                                #      print(f"[INFO LASER] Position brute ({potential_laser_x:.1f}, {potential_laser_y:.1f}) ignorée car trop éloignée (> {max_allowed_distance} mm).")
+                        else:
+                            # print("[AVERTISSEMENT LASER] Aucun minimum de gradient valide trouvé dans la zone de recherche (chauffage détecté).")
+                            raw_pos_found_this_frame = False
+                except (ValueError, IndexError):
+                    # print("[AVERTISSEMENT LASER] Impossible de trouver/évaluer le maximum de la différence temporelle.")
+                    raw_pos_found_this_frame = False
             else:
-                # Premier frame ou changement de forme, pas de calcul de différence possible
-                laser_pos_found = False
+                raw_pos_found_this_frame = False
+                self.last_valid_raw_pos = None
                 if self.previous_ti_filtered is None:
-                    print("[INFO LASER] Attente du prochain frame pour calculer la position basée sur la différence.")
+                    print("[INFO LASER] Attente du prochain frame pour calculer la position.")
                 elif self.previous_ti_filtered.shape != ti_filtered.shape:
                      print("[ERREUR LASER] Incohérence de forme de grille, réinitialisation.")
-                     self.previous_ti_filtered = None # Réinitialiser pour éviter erreurs futures
+                     self.previous_ti_filtered = None
+
+            # --- Filtrage Temporel (Médiane Mobile) (INCHANGÉ) ---
+            if raw_pos_found_this_frame:
+                self.position_history.append((raw_laser_x, raw_laser_y))
+            self.position_history = self.position_history[-self.history_length:]
+            filtered_laser_x, filtered_laser_y = None, None
+            if len(self.position_history) > 0:
+                valid_x = [p[0] for p in self.position_history]
+                valid_y = [p[1] for p in self.position_history]
+                if len(valid_x) >= 3:
+                    filtered_laser_x = np.median(valid_x)
+                    filtered_laser_y = np.median(valid_y)
+                elif len(valid_x) > 0:
+                     filtered_laser_x = np.mean(valid_x)
+                     filtered_laser_y = np.mean(valid_y)
+
+            if filtered_laser_x is not None:
+                self.last_filtered_pos = (filtered_laser_x, filtered_laser_y)
+                final_laser_pos_found = True
+            else:
+                self.last_filtered_pos = (None, None)
+                final_laser_pos_found = False
 
         except Exception as e:
              print(f"[ERREUR RBF/GRADIENT/LASER] Échec: {e}")
-             ax1.set_title("Erreur Calcul")
-             ax2.set_title("Erreur Calcul")
-             # ... (affichage points si erreur) ...
-             self.previous_ti_filtered = None # Réinitialiser en cas d'erreur
+             # --- MODIFIÉ : Titre pour le seul axe ---
+             ax.set_title("Erreur Calcul Gradient/Laser")
+             # Optionnel: Afficher points si erreur
+             # for item in thermistor_data_for_plot: ...
+             self.previous_ti_filtered = None
+             self.last_valid_raw_pos = None
+             self.position_history = []
+             self.last_filtered_pos = (None, None)
+             final_laser_pos_found = False
              return
 
-        # --- Mise à jour de la carte précédente pour le prochain cycle ---
-        # S'assurer de copier même si laser_pos_found est False pour le prochain calcul
+        # --- Mise à jour de la carte précédente (INCHANGÉ) ---
         if ti_filtered is not None:
             self.previous_ti_filtered = ti_filtered.copy()
 
-        # --- Affichage Subplot 1 : Heatmap Température ---
-        contour1 = ax1.contourf(xi, yi, ti_masked, levels=100, cmap="plasma")
-        fig.colorbar(contour1, ax=ax1, label="Température (°C)", shrink=0.6)
-
-        # Affichage des points (réels et virtuel) sur ax1
-        plotted_labels = set()
-        for item in thermistor_data_for_plot:
-            if pd.notna(item["temp"]):
-                is_virtual = item["name"] == "R_Virtuel"
-                marker = 's' if is_virtual else 'o'
-                color = 'magenta' if is_virtual else 'black'
-                label = 'Virtuel' if is_virtual else 'Réelles'
-                if label not in plotted_labels:
-                    ax1.scatter(item["pos"][0], item["pos"][1], color=color, marker=marker, s=35, label=label)
-                    plotted_labels.add(label)
-                else:
-                    ax1.scatter(item["pos"][0], item["pos"][1], color=color, marker=marker, s=35)
-                ax1.annotate(item["name"], item["pos"], textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8, color=color)
-
-        # Afficher le point laser (Min Gradient Local) sur ax1
-        if laser_pos_found:
-            label_laser = f'Laser (Min Grad Local) @ ({laser_x:.1f}, {laser_y:.1f})'
-            ax1.plot(laser_x, laser_y, 'bx', markersize=10, label=label_laser)
-        else:
-            label_laser = 'Laser (Position non trouvée)'
-            # Optionnel: afficher un marqueur différent ou rien si non trouvé
-
-        # Configuration ax1
-        ax1.set_aspect('equal')
-        title_ax1 = f"Heatmap Température (Tps: {elapsed_time:.2f} s)"
-        if laser_pos_found:
-             title_ax1 += f"\n{label_laser}"
-        ax1.set_title(title_ax1, fontsize=9)
-        ax1.set_xlabel("X (mm)")
-        ax1.set_ylabel("Y (mm)")
-        ax1.set_xlim(-r_max - 1, r_max + 1)
-        ax1.set_ylim(-r_max - 1, r_max + 1)
-        ax1.legend(fontsize=7, loc='upper right')
-
-        # --- Affichage Subplot 2 : Heatmap Magnitude du Gradient ---
+        # --- Affichage Subplot UNIQUE : Heatmap Magnitude du Gradient ---
         if grad_magnitude_masked is not None:
-            contour2 = ax2.contourf(xi, yi, grad_magnitude_masked, levels=50, cmap="viridis")
-            fig.colorbar(contour2, ax=ax2, label="Magnitude Gradient Temp. (°C/mm)", shrink=0.6)
-            ax2.scatter(x_all_points, y_all_points, color='white', marker='.', s=10, alpha=0.5)
+            contour = ax.contourf(xi, yi, grad_magnitude_masked, levels=50, cmap="viridis")
+            fig.colorbar(contour, ax=ax, label="Magnitude Gradient Temp. (°C/mm)", shrink=0.8) # Ajusté shrink
+            # Optionnel: Afficher les points des thermistances (hors R25)
+            ax.scatter(x_all_points, y_all_points, color='white', marker='.', s=10, alpha=0.5, label='Thermistances')
 
-            # Afficher la position du laser (Min Gradient Local) sur ax2
-            if laser_pos_found:
-                ax2.plot(laser_x, laser_y, 'rx', markersize=8, label='Min Grad Local')
+            # --- MODIFIÉ : Afficher la position du laser FILTRÉE et ajouter à la légende ---
+            plot_x, plot_y = self.last_filtered_pos
+            if final_laser_pos_found:
+                # Le label contient déjà les coordonnées
+                label_laser = f'Laser (Médiane {len(self.position_history)}/{self.history_length}) @ ({plot_x:.1f}, {plot_y:.1f})'
+                ax.plot(plot_x, plot_y, 'rx', markersize=10, label=label_laser) # Croix rouge
 
-            ax2.set_aspect('equal')
-            ax2.set_title("Gradient Température", fontsize=9)
-            ax2.set_xlabel("X (mm)")
-            ax2.set_ylabel("Y (mm)")
-            ax2.set_xlim(-r_max - 1, r_max + 1)
-            ax2.set_ylim(-r_max - 1, r_max + 1)
-            if laser_pos_found:
-                ax2.legend(fontsize=7, loc='upper right')
+            # Configuration de l'axe unique
+            ax.set_aspect('equal')
+            ax.set_title(f"Gradient Température (Tps: {elapsed_time:.2f} s)", fontsize=10) # Ajusté fontsize
+            ax.set_xlabel("X (mm)")
+            ax.set_ylabel("Y (mm)")
+            ax.set_xlim(-r_max - 1, r_max + 1)
+            ax.set_ylim(-r_max - 1, r_max + 1)
+            # --- MODIFIÉ : Afficher la légende (inclut maintenant le laser si trouvé) ---
+            ax.legend(fontsize=8, loc='upper right') # Ajusté fontsize
         else:
-            ax2.set_title("Gradient non calculé")
+            # --- MODIFIÉ : Titre pour le seul axe ---
+            ax.set_title("Gradient non calculé")
+            ax.set_aspect('equal')
+            ax.set_xlabel("X (mm)")
+            ax.set_ylabel("Y (mm)")
+            ax.set_xlim(-r_max - 1, r_max + 1)
+            ax.set_ylim(-r_max - 1, r_max + 1)
 
         # --- Ajustement final de la mise en page ---
-        fig.tight_layout(pad=2.0)
+        fig.tight_layout(pad=2.5) # Ajusté pad
+
+
 
 
     def demarrer_acquisition_live(self, interval=0.2):
@@ -702,7 +725,7 @@ class TraitementDonnees:
                 data = self.get_temperatures()
 
                 if data:
-                    os.system('cls' if os.name == 'nt' else 'clear')
+                    #os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
@@ -744,7 +767,7 @@ class TraitementDonnees:
                     all_data.append(ligne)
 
                 else:
-                    os.system('cls' if os.name == 'nt' else 'clear')
+                    #os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
