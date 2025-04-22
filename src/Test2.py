@@ -61,7 +61,7 @@ class TraitementDonnees:
         self.last_valid_raw_pos = None # Dernière position brute jugée valide (pour limite vitesse)
         self.last_filtered_pos = (None, None) # Dernière position filtrée (pour affichage)
         self.max_speed_mm_per_interval = 3.0 # Max déplacement en mm entre frames (ajustable)
-        self.min_heating_threshold = 0.05
+        self.min_heating_threshold = 0.20
         # --- FIN AJOUT ---
         if self.simulation:
             self.ser = None
@@ -639,7 +639,6 @@ class TraitementDonnees:
                 final_laser_pos_found = True
             else:
                 self.last_filtered_pos = (None, None)
-                final_laser_pos_found = False
 
         except Exception as e:
              print(f"[ERREUR RBF/GRADIENT/LASER] Échec: {e}")
@@ -647,6 +646,7 @@ class TraitementDonnees:
              ax.set_title("Erreur Calcul Gradient/Laser")
              # Optionnel: Afficher points si erreur
              # for item in thermistor_data_for_plot: ...
+             
              self.previous_ti_filtered = None
              self.last_valid_raw_pos = None
              self.position_history = []
