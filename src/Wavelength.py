@@ -3,7 +3,7 @@ import numpy as np
 from functools import reduce
 
 
-path = "src/CSV_wavelength/"
+path = "data/"
 
 correction_matrices = [
     pd.read_csv(path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values
@@ -21,12 +21,12 @@ photodiode_ratios_1976 = pd.read_csv(path + "ratios_photodiodes_1976.csv", sep='
 
 
 photodiode_tensions_450 = [
-    pd.read_csv("tensions_photodiodes_450.csv", sep=';', decimal=',')[col].values
-    for col in pd.read_csv("tensions_photodiodes_450.csv", sep=';', decimal=',').columns
+    pd.read_csv(path + "tensions_photodiodes_450.csv", sep=';', decimal=',')[col].values
+    for col in pd.read_csv(path + "tensions_photodiodes_450.csv", sep=';', decimal=',').columns
 ]
 photodiode_tensions_976 = [
-    pd.read_csv("tensions_photodiodes_976.csv", sep=';', decimal=',')[col].values
-    for col in pd.read_csv("tensions_photodiodes_976.csv", sep=';', decimal=',').columns
+    pd.read_csv(path + "tensions_photodiodes_976.csv", sep=';', decimal=',')[col].values
+    for col in pd.read_csv(path + "tensions_photodiodes_976.csv", sep=';', decimal=',').columns
 ]
 
 def id_pos(pos):
