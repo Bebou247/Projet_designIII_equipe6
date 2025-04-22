@@ -42,7 +42,7 @@ class TraitementDonnees:
         # self.indices_à_garder.append(24) # Si R25 est lue
 
         self.simulation_data = None
-        self.simulation_index = 150
+        self.simulation_index = 0
         self.simulation_columns = [p[0] for i, p in enumerate(self.positions) if p[0] != "R_Virtuel" and i in self.indices_à_garder]
         if "R25" in [p[0] for p in self.positions] and 24 not in self.indices_à_garder:
              if any(p[0] == "R25" for p in self.positions):
@@ -68,9 +68,9 @@ class TraitementDonnees:
             print("[SIMULATION] Mode simulation activé.")
             try:
                 script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 3.csv"
-                self.simulation_data = pd.read_csv(simulation_file_path)
-                #self.simulation_data = pd.read_csv(simulation_file_path, sep = ';', decimal = ',')
+                simulation_file_path = script_dir.parent / "data" / "10 W hauteur 1 (droite à gauche).csv"
+                #self.simulation_data = pd.read_csv(simulation_file_path)
+                self.simulation_data = pd.read_csv(simulation_file_path, sep = ';', decimal = ',')
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
 
                 missing_cols = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
@@ -156,7 +156,6 @@ class TraitementDonnees:
             try:
                 if self.ser.in_waiting > 0:
                     line = self.ser.readline().decode(errors='ignore').strip()
-                    print(f"[DEBUG RAW] Reçu: '{line}'")
                     if not line:
                         continue
 
@@ -542,7 +541,7 @@ class TraitementDonnees:
         try:
             # --- Calcul RBF et Filtre Température (INCHANGÉ) ---
             rbf = Rbf(x_combined, y_combined, t_combined, function='multiquadric', smooth=0.5)
-            grid_size = 200
+            grid_size = 100
             xi, yi = np.meshgrid(
                 np.linspace(-r_max, r_max, grid_size),
                 np.linspace(-r_max, r_max, grid_size)
@@ -663,7 +662,7 @@ class TraitementDonnees:
             contour = ax.contourf(xi, yi, grad_magnitude_masked, levels=50, cmap="viridis")
             fig.colorbar(contour, ax=ax, label="Magnitude Gradient Temp. (°C/mm)", shrink=0.8) # Ajusté shrink
             # Optionnel: Afficher les points des thermistances (hors R25)
-            ax.scatter(x_all_points, y_all_points, color='white', marker='.', s=10, alpha=0.5, label='Thermistances')
+            ax.scatter(x_all_points, y_all_points, color='white', marker='.', s=10, alpha=0.5)
 
             # --- MODIFIÉ : Afficher la position du laser FILTRÉE et ajouter à la légende ---
             plot_x, plot_y = self.last_filtered_pos
@@ -802,5 +801,5 @@ class TraitementDonnees:
 
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=True)
+    td = TraitementDonnees(simulation=False)
     td.demarrer_acquisition_live(interval=0.1)
