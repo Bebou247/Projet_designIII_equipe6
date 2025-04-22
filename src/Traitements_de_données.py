@@ -38,6 +38,17 @@ class TraitementDonnees:
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
 
+        self.correction_matrices = [pd.read_csv(self.path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
+        self.photodiode_ratios_450 = [pd.read_csv(self.path + "ratios_photodiodes_450.csv", sep=';', decimal=',')[col].values
+                                for col in pd.read_csv(self.path + "ratios_photodiodes_450.csv", sep=';', decimal=',').columns]
+        self.photodiode_ratios_976 = [pd.read_csv(self.path + "ratios_photodiodes_976.csv", sep=';', decimal=',')[col].values
+                                for col in pd.read_csv(self.path + "ratios_photodiodes_976.csv", sep=';', decimal=',').columns]
+        self.photodiode_ratios_1976 = pd.read_csv(self.path + "ratios_photodiodes_1976.csv", sep=';', decimal=',').values
+        self.photodiode_tensions_450 = [pd.read_csv(self.path + "tensions_photodiodes_450.csv", sep=';', decimal=',')[col].values
+                                    for col in pd.read_csv(self.path + "tensions_photodiodes_450.csv", sep=';', decimal=',').columns]
+        self.photodiode_tensions_976 = [pd.read_csv(self.path + "tensions_photodiodes_976.csv", sep=';', decimal=',')[col].values
+                                    for col in pd.read_csv(self.path + "tensions_photodiodes_976.csv", sep=';', decimal=',').columns]
+
         # Décalage à appliquer
         decalage_x = -0.4  # vers la gauche
         decalage_y = -0.2  # légèrement plus bas
@@ -814,92 +825,73 @@ class TraitementDonnees:
             else:
                 print("ℹAucune donnée collectée à sauvegarder.")
 
+    def id_pos(self, pos):
+        extremas = 6
+        inter = np.linspace(-extremas, extremas, len(self.correction_matrices[0]))
+        delta = np.abs(inter - np.array(pos)[:, None])
+        return delta[0].argmin(), delta[1].argmin()
 
+    def indexes(self, array, target, threshold=0.1):
+        return np.where(np.abs(array - target) <= np.maximum(np.abs(target) * threshold, threshold))[0]
 
+    def precise_wavelength(self, func, *args, threshold, threshold_mult, max_iter=20):
+        for _ in range(max_iter):
+            wavelength = func(*args, threshold)
+            if len(wavelength) == 1:
+                return wavelength
+            if len(wavelength) == 0:
+                return self.precise_wavelength(func, *args, threshold=threshold / threshold_mult, threshold_mult=np.sqrt(threshold_mult))
+            threshold *= threshold_mult
+        return wavelength
 
-def id_pos(pos):
-    extremas = 6
-    inter = np.linspace(-extremas, extremas, len(correction_matrices[0]))
-    delta = np.abs(inter - np.array(pos)[:, None])
-    return delta[0].argmin(), delta[1].argmin()
+    def get_visible_wavelength(self, V_corr, threshold=0.1):
+        V_corr[-2] = 0
+        ratios_corr = np.divide(V_corr[1:], V_corr[:-1], out=np.zeros_like(V_corr[1:]), where=V_corr[:-1] != 0)
+        ratio_ids_corr = [self.indexes(self.photodiode_ratios_450[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
+        if not ratio_ids_corr or any(len(ids) == 0 for ids in ratio_ids_corr):
+            return np.array([])
+        return reduce(np.intersect1d, ratio_ids_corr)
 
-def indexes(array, target, threshold=0.1):
-    return np.where(np.abs(array - target) <= np.maximum(np.abs(target) * threshold, threshold))[0]
+    def get_NIR_wavelength(self, V_corr, threshold=0.1):
+        ratios_corr = np.divide(V_corr[1:], V_corr[:-1], out=np.zeros_like(V_corr[1:]), where=V_corr[:-1] != 0)
+        ratio_ids_corr = [self.indexes(self.photodiode_ratios_976[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
+        if not ratio_ids_corr or any(len(ids) == 0 for ids in ratio_ids_corr):
+            return np.array([])
+        return reduce(np.intersect1d, ratio_ids_corr)
 
-def precise_wavelength(func, *args, threshold, threshold_mult, max_iter=20):
-    for _ in range(max_iter):
-        wavelength = func(*args, threshold)
-        if len(wavelength) == 1:
-            return wavelength
-        if len(wavelength) == 0:
-            return precise_wavelength(func, *args, threshold=threshold / threshold_mult, threshold_mult=np.sqrt(threshold_mult))
-        threshold *= threshold_mult
-    return wavelength
+    def get_IR_wavelength(self, V_corr, puissance, threshold):
+        ratio = V_corr / puissance
+        return self.indexes(self.photodiode_ratios_1976, ratio, threshold)
 
-def get_visible_wavelength(V_corr, threshold=0.1):
-    V_corr[-2] = 0
-    ratios_corr = np.divide(V_corr[1:], V_corr[:-1], out=np.zeros_like(V_corr[1:]), where=V_corr[:-1] != 0)
-    ratio_ids_corr = [indexes(photodiode_ratios_450[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
-    if not ratio_ids_corr or any(len(ids) == 0 for ids in ratio_ids_corr):
-        return np.array([])
-    return reduce(np.intersect1d, ratio_ids_corr)
+    def get_VIS_power(self, wavelength, V_corr):
+        V_corr[-2] = 0
+        V_corr[-1] = 0
+        V_ratio = [10 * V_corr[i] / self.photodiode_tensions_450[i][int(wavelength) - 200] for i in range(6)
+                if self.photodiode_tensions_450[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
+        return np.mean(V_ratio)
 
-def get_NIR_wavelength(V_corr, threshold=0.1):
-    ratios_corr = np.divide(V_corr[1:], V_corr[:-1], out=np.zeros_like(V_corr[1:]), where=V_corr[:-1] != 0)
-    ratio_ids_corr = [indexes(photodiode_ratios_976[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
-    if not ratio_ids_corr or any(len(ids) == 0 for ids in ratio_ids_corr):
-        return np.array([])
-    return reduce(np.intersect1d, ratio_ids_corr)
+    def get_NIR_power(self, wavelength, V_corr):
+        V_ratio = [10 * V_corr[i] / self.photodiode_tensions_976[i][int(wavelength) - 200] for i in range(6)
+                if self.photodiode_tensions_976[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
+        return np.mean(V_ratio)
 
-def get_IR_wavelength(V_corr, puissance, threshold):
-    ratio = V_corr / puissance
-    return indexes(photodiode_ratios_1976, ratio, threshold)
-
-def get_VIS_power(wavelength, V_corr):
-    V_corr[-2] = 0
-    V_corr[-1] = 0
-    V_ratio = [10 * V_corr[i] / photodiode_tensions_450[i][int(wavelength) - 200] for i in range(6)
-               if photodiode_tensions_450[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
-    return np.mean(V_ratio)
-
-def get_NIR_power(wavelength, V_corr):
-    V_ratio = [10 * V_corr[i] / photodiode_tensions_976[i][int(wavelength) - 200] for i in range(6)
-               if photodiode_tensions_976[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
-    return np.mean(V_ratio)
-
-def get_wavelength(position, V_photodiodes, puissance, threshold=0.1, threshold_mult=1.25):
-    pos = id_pos(position)
-    V_corr = np.array([V * correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
-    index_max = np.argmax(V_corr)
-    if all(V < 0.1 for V in V_corr):
-        return "Unknown", 0, puissance
-    elif index_max == 0:
-        return "UV", -200, puissance
-    elif index_max == 1:
-        wavelength = np.mean(precise_wavelength(get_visible_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
-        return "VIS", wavelength, get_VIS_power(wavelength, V_corr)
-    elif index_max == 5:
-        wavelength = np.mean(precise_wavelength(get_IR_wavelength, V_corr[-1], puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
-        return "IR", wavelength, puissance
-    else:
-        wavelength = np.mean(precise_wavelength(get_NIR_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
-        return "NIR", wavelength, get_NIR_power(wavelength, V_corr)
-
-
-path = self.path
-correction_matrices = [pd.read_csv(path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
-photodiode_ratios_450 = [pd.read_csv(path + "ratios_photodiodes_450.csv", sep=';', decimal=',')[col].values
-                          for col in pd.read_csv(path + "ratios_photodiodes_450.csv", sep=';', decimal=',').columns]
-photodiode_ratios_976 = [pd.read_csv(path + "ratios_photodiodes_976.csv", sep=';', decimal=',')[col].values
-                          for col in pd.read_csv(path + "ratios_photodiodes_976.csv", sep=';', decimal=',').columns]
-photodiode_ratios_1976 = pd.read_csv(path + "ratios_photodiodes_1976.csv", sep=';', decimal=',').values
-photodiode_tensions_450 = [pd.read_csv(path + "tensions_photodiodes_450.csv", sep=';', decimal=',')[col].values
-                            for col in pd.read_csv(path + "tensions_photodiodes_450.csv", sep=';', decimal=',').columns]
-photodiode_tensions_976 = [pd.read_csv(path + "tensions_photodiodes_976.csv", sep=';', decimal=',')[col].values
-                            for col in pd.read_csv(path + "tensions_photodiodes_976.csv", sep=';', decimal=',').columns]
-
-
-
+    def get_wavelength(self, position, V_photodiodes, puissance, threshold=0.1, threshold_mult=1.25):
+        pos = self.id_pos(position)
+        V_corr = np.array([V * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
+        index_max = np.argmax(V_corr)
+        if all(V < 0.1 for V in V_corr):
+            return "Unknown", 0, puissance
+        elif index_max == 0:
+            return "UV", -200, puissance
+        elif index_max == 1:
+            wavelength = np.mean(self.precise_wavelength(self.get_visible_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
+            return "VIS", wavelength, self.get_VIS_power(wavelength, V_corr)
+        elif index_max == 5:
+            wavelength = np.mean(self.precise_wavelength(self.get_IR_wavelength, V_corr[-1], puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
+            return "IR", wavelength, puissance
+        else:
+            wavelength = np.mean(self.precise_wavelength(self.get_NIR_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
+            return "NIR", wavelength, self.get_NIR_power(wavelength, V_corr)
 
 
 if __name__ == "__main__":
@@ -907,11 +899,11 @@ if __name__ == "__main__":
     td.demarrer_acquisition_live(interval=0.1)
     puissance_estimee = 0.75  # en Watts (exemple arbitraire)
 
-    type_lumiere, lambda_nm, puissance_corrigee = get_wavelength(
-        position=position,
-        V_photodiodes=V_photodiodes,
-        puissance=puissance_estimee
-    )
+    # type_lumiere, lambda_nm, puissance_corrigee = get_wavelength(
+    #     position=position,
+    #     V_photodiodes=V_photodiodes,
+    #     puissance=puissance_estimee
+    # )
 
     print(f"Résultat : {type_lumiere} | λ = {lambda_nm:.1f} nm | Puissance corrigée = {puissance_corrigee:.2f} W")
 
