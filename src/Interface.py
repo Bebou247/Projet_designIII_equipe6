@@ -1,6 +1,6 @@
 from mytk import App
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from Traitements_de_données import *
@@ -15,17 +15,51 @@ class MyApp(App):
         self.window.widget.attributes("-fullscreen", True)
         self.window.widget.bind("<Escape>", lambda e: self.window.widget.attributes("-fullscreen", False))
 
-        try:
-            self.td = TraitementDonnees(simulation=False)
-            if not self.td.est_connecte():
-                raise Exception("Arduino non détecté")
-        except:
-            print("[INFO] Lancement en mode simulation")
-            self.td = TraitementDonnees(simulation=True)
+        self.dossier_sauvegarde = Path("data/saves")
+        self.dossier_sauvegarde.mkdir(parents=True, exist_ok=True)
+
+        self.td = None
+        self.simulation_mode = True
+        self.fichier_simulation = None
+        self.start_time = None
 
         self.running = False
+        self.simulation_completee = False
         self.donnees_enregistrées = []
 
+        self.build_interface()  # Initialiser l'interface d'abord
+
+        if self.arduino_disponible():
+            self.simulation_mode = False
+            self.td = TraitementDonnees(simulation=False, path="data")
+            self.log_mode = "Arduino détecté. Mode acquisition live."
+        else:
+            self.simulation_mode = True
+            self.log_mode = "Arduino non détecté. Mode simulation."
+            self.label_etat.config(text=self.log_mode, foreground="orange")
+            self.log(self.log_mode)
+            self.after(100, self.choisir_csv_interface)
+
+        self.maj_etat_connection()
+        self.check_connection_loop()
+        self.log(self.log_mode)
+
+    def arduino_disponible(self):
+        try:
+            test = TraitementDonnees(simulation=False)
+            return test.est_connecte()
+        except:
+            return False
+
+    def choisir_csv_interface(self):
+        fichier = filedialog.askopenfilename(initialdir=self.dossier_sauvegarde, title="Choisir un fichier CSV", filetypes=[("Fichiers CSV", "*.csv")])
+        if fichier:
+            self.rejouer_simulation(fichier)
+        else:
+            self.label_etat.config(text="Aucun fichier sélectionné.", foreground="red")
+            self.log("❌ Aucun fichier sélectionné.")
+
+    def build_interface(self):
         self.frame = ttk.Frame(self.window.widget, padding=10)
         self.frame.pack(expand=True, fill='both')
         self.frame.columnconfigure(0, weight=1)
@@ -61,14 +95,76 @@ class MyApp(App):
 
         boutons_frame = ttk.Frame(self.frame_droite)
         boutons_frame.grid(row=1, column=0, pady=10)
-        ttk.Button(boutons_frame, text="▶ Démarrer Live", command=self.demarrer_live).pack(side="left", padx=10)
-        ttk.Button(boutons_frame, text="⏹ Arrêter", command=self.arreter_live).pack(side="left", padx=10)
+        self.bouton_start = ttk.Button(boutons_frame, text="▶ Reprendre", command=self.reprendre_simulation)
+        self.bouton_start.pack(side="left", padx=10)
+        self.bouton_stop = ttk.Button(boutons_frame, text="⏹ Arrêter", command=self.arreter_live)
+        self.bouton_stop.pack(side="left", padx=10)
+        self.bouton_csv = ttk.Button(boutons_frame, text="📂 Charger CSV", command=self.choisir_csv_interface)
+        self.bouton_csv.pack(side="left", padx=10)
 
         self.label_etat = ttk.Label(self.frame_droite, text="", foreground="red")
         self.label_etat.grid(row=2, column=0, pady=5)
 
-        self.maj_etat_connection()
-        self.check_connection_loop()
+    # Le reste du code (reprendre_simulation, demarrer_live, arreter_live, etc.) reste inchangé
+
+
+    def reprendre_simulation(self):
+        if self.running:
+            return
+        if self.simulation_mode and self.simulation_completee:
+            self.simulation_completee = False
+            self.td.simulation_index = 0
+        self.demarrer_live()
+
+    def demarrer_live(self):
+        if self.running:
+            return
+        self.running = True
+        self.start_time = time.time()
+        self.label_etat.config(text="Lecture en cours.", foreground="blue")
+        self.bouton_start.state(["disabled"])
+        self.bouton_csv.state(["disabled"])
+        self.log("▶ Acquisition démarrée")
+        self.donnees_enregistrées.clear()
+        self.mettre_a_jour_interface()
+
+    def arreter_live(self):
+        if not self.running:
+            return
+        self.running = False
+        self.simulation_completee = self.simulation_mode
+        self.label_etat.config(text="⏹ Lecture arrêtée.", foreground="gray")
+        self.bouton_start.state(["!disabled"])
+        self.bouton_csv.state(["!disabled"])
+        self.log("⏹ Acquisition arrêtée")
+
+        if not self.simulation_mode and self.donnees_enregistrées:
+            filename = f"acquisition_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+            filepath = self.dossier_sauvegarde / filename
+            try:
+                with open(filepath, mode='w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(self.donnees_enregistrées[0].keys())
+                    for row in self.donnees_enregistrées:
+                        writer.writerow(row.values())
+                self.log(f"Données sauvegardées : {filepath}")
+            except Exception as e:
+                self.log(f"Erreur lors de la sauvegarde : {e}")
+
+    def rejouer_simulation(self, fichier=None):
+        if not fichier:
+            fichier = self.selectionner_csv()
+        if not fichier:
+            return
+        self.simulation_mode = True
+        self.fichier_simulation = fichier
+        self.td = TraitementDonnees(simulation=True)
+        self.td.simulation_data = pd.read_csv(fichier)
+        self.td.simulation_index = 0
+        self.simulation_completee = False
+        self.label_etat.config(text="Mode simulation.", foreground="orange")
+        self.log(f"Lectures du fichier : {fichier}")
+        self.demarrer_live()
 
     def log(self, message):
         horodatage = time.strftime("[%H:%M:%S]")
@@ -76,89 +172,44 @@ class MyApp(App):
         self.text_logs.see(tk.END)
 
     def maj_etat_connection(self):
-        if not self.td.est_connecte():
+        if not self.td or not self.td.est_connecte():
             self.label_etat.config(text="Arduino non connecté", foreground="red")
             self.log("Arduino non connecté =-(")
         else:
             self.label_etat.config(text=" Prêt", foreground="green")
             self.log(" Arduino connecté")
 
-    def demarrer_live(self):
-        if not self.td.est_connecte() and not self.td.simulation:
-            self.label_etat.config(text="Aucun Arduino détecté.", foreground="red")
-            self.log("❌ Échec : Arduino non détecté.")
-            return
-
-        if not self.running:
-            self.running = True
-            self.label_etat.config(text="Lecture en cours.", foreground="blue")
-            self.log("▶ Acquisition démarrée")
-            self.donnees_enregistrées.clear()
-            self.mettre_a_jour_interface()
-
-    def arreter_live(self):
-        self.running = False
-        self.label_etat.config(text="⏹ Lecture arrêtée.", foreground="gray")
-        self.log("⏹ Acquisition arrêtée")
-
-        if self.donnees_enregistrées:
-            noms = [self.td.positions[i][0] if i != 24 else "R25" for i in self.td.indices_à_garder]
-            photodiode_headers = [f"PD{i}" for i in self.td.canaux_photodiodes]
-            headers = noms + photodiode_headers + ["Puissance (W)", "Longueur d'onde (nm)", "Timestamp"]
-
-            desktop = Path.home() / "Desktop"
-            filename = f"donnees_thermistances_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-            chemin_fichier = desktop / filename
-
-            try:
-                with open(chemin_fichier, mode='w', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(headers)
-                    writer.writerows(self.donnees_enregistrées)
-
-                self.log(f"Données sauvegardées : {chemin_fichier}")
-            except Exception as e:
-                self.log(f"⚠️ Erreur de sauvegarde : {e}")
-
     def mettre_a_jour_interface(self):
         if self.running and (self.td.est_connecte() or self.td.simulation):
-            data_raw = self.td.lire_donnees()
-            if data_raw:
-                temp_dict = self.td.get_temperatures(data_raw)
-                if temp_dict:
-                    self.td.afficher_heatmap_dans_figure(temp_dict, self.fig)
-                    self.canvas.draw()
+            data = self.td.get_temperatures()
+            if data:
+                elapsed_time = time.time() - self.start_time
+                self.td.afficher_heatmap_dans_figure(data, self.fig, elapsed_time=elapsed_time)
+                self.canvas.draw()
+                puissance = 0.0
+                lambda_nm = 0.0
+                self.label_puissance.config(text=f"{puissance:.2f} W")
+                self.label_lambda.config(text=f"{lambda_nm:.1f} nm")
+                row = {k: v for k, v in data.items()}
+                row["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                self.donnees_enregistrées.append(row)
 
-                    puissance = self.td.estimate_laser_power(25, max(temp_dict.values()), 3, (0, 0))
-                    lambda_nm = self.td.estimate_laser_wavelength() if hasattr(self.td, 'estimate_laser_wavelength') else 0.0
-
-                    self.label_puissance.config(text=f"{puissance:.2f} W")
-                    self.label_lambda.config(text=f"{lambda_nm:.1f} nm")
-
-                    ligne = [temp_dict.get(pos[0], "--") for pos in self.td.positions[:21]]
-                    ligne += [data_raw.get(i, "--") for i in self.td.canaux_photodiodes]
-                    ligne += [puissance, lambda_nm, time.strftime('%Y-%m-%d %H:%M:%S')]
-                    self.donnees_enregistrées.append(ligne)
+            if self.td.simulation and self.td.simulation_index >= len(self.td.simulation_data):
+                self.simulation_completee = True
+                self.arreter_live()
+                return
 
             self.window.widget.after(200, self.mettre_a_jour_interface)
-        elif self.running:
-            self.label_etat.config(text="Arduino déconnecté.", foreground="red")
-            self.log("❌ Arduino déconnecté")
 
     def check_connection_loop(self):
-        if not self.td.est_connecte() and not self.td.simulation:
-            try:
+        if not self.td or not self.td.est_connecte():
+            if self.arduino_disponible():
                 self.td = TraitementDonnees(simulation=False)
-                if self.td.est_connecte():
-                    self.label_etat.config(text="Arduino reconnecté", foreground="green")
-                    self.log("🔌 Arduino reconnecté")
-            except Exception:
-                pass
+                self.simulation_mode = False
+                self.label_etat.config(text="Arduino reconnecté", foreground="green")
+                self.log("🔌 Arduino reconnecté")
         self.window.widget.after(3000, self.check_connection_loop)
 
 if __name__ == "__main__":
     app = MyApp()
     app.mainloop()
-
-
-
