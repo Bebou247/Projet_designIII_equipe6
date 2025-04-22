@@ -42,6 +42,8 @@ class TraitementDonnees:
         decalage_x = -0.4  # vers la gauche
         decalage_y = -0.2  # légèrement plus bas
 
+        self.tension_photodidodes = [0,0,0,0,0,0]
+
         self.positions = [
             ("R1", (11 + decalage_x, 0 + decalage_y)), ("R2", (3 + 1, 0 + decalage_y)), ("R3", (-3 + decalage_x, 0 + decalage_y)), ("R4", (-11 + decalage_x, 0 + decalage_y)),
             ("R5", (8 + 1, 2.5 - decalage_y)), ("R6", (0 + decalage_x, 2.5 + decalage_y)), ("R7", (-8 + decalage_x, 2.5 + decalage_y)), ("R8", (8 + 1, 5.5 - decalage_y)),
@@ -798,6 +800,10 @@ class TraitementDonnees:
                     print("Températures mesurées")
                     print("-" * 60)
                     valid_temps_count = 0
+
+                    for i in range(6):
+                        self.tension_photodidodes[i] = data[self.photodiodes[i]]
+
                     for name, temp in data.items():
                         display_name = name
                         if pd.notna(temp):
@@ -934,13 +940,20 @@ class TraitementDonnees:
 
         V_photodiodes = self.data_photodiodes
 
-        V_corr = np.array([V * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
+        # print(V_photodiodes)
+
+        # V_corr = np.array([self.tension_photodidodes * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
+        # index_max = np.argmax(V_corr)
+
+        V_corr = V_photodiodes
         index_max = np.argmax(V_corr)
 
-        if all(V < 0.1 for V in V_corr):
-            return "inconnu", 0, self.puissance
-        elif index_max == 0:
-            return "UV", -200, self.puissance
+        # print(V_corr)
+
+        # if all(V < 0.01 for V in V_corr):
+            # return "inconnu", 0, self.puissance
+        if index_max == 0:
+            return "UV", 0, self.puissance
         elif index_max == 1:
             self.wavelength = np.mean(self.precise_wavelength(self.get_visible_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
