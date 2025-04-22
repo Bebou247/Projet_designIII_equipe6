@@ -12,6 +12,20 @@ import pandas as pd
 from pathlib import Path
 from scipy.ndimage import gaussian_filter
 import math
+import serial
+import numpy as np
+from scipy.interpolate import Rbf
+import re
+import time
+import matplotlib.pyplot as plt
+import os
+import csv
+from datetime import datetime
+import pandas as pd
+from pathlib import Path
+from scipy.ndimage import gaussian_filter
+import math
+from functools import reduce
 
 
 class TraitementDonnees:
@@ -800,22 +814,9 @@ class TraitementDonnees:
             else:
                 print("ℹAucune donnée collectée à sauvegarder.")
 
-    import serial
-import numpy as np
-from scipy.interpolate import Rbf
-import re
-import time
-import matplotlib.pyplot as plt
-import os
-import csv
-from datetime import datetime
-import pandas as pd
-from pathlib import Path
-from scipy.ndimage import gaussian_filter
-import math
-from functools import reduce
 
-# === AJOUT : Fonctions pour l'analyse des photodiodes ===
+
+
 def id_pos(pos):
     extremas = 6
     inter = np.linspace(-extremas, extremas, len(correction_matrices[0]))
@@ -885,7 +886,7 @@ def get_wavelength(position, V_photodiodes, puissance, threshold=0.1, threshold_
         return "NIR", wavelength, get_NIR_power(wavelength, V_corr)
 
 
-path = "data/"
+path = self.path
 correction_matrices = [pd.read_csv(path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
 photodiode_ratios_450 = [pd.read_csv(path + "ratios_photodiodes_450.csv", sep=';', decimal=',')[col].values
                           for col in pd.read_csv(path + "ratios_photodiodes_450.csv", sep=';', decimal=',').columns]
@@ -904,9 +905,6 @@ photodiode_tensions_976 = [pd.read_csv(path + "tensions_photodiodes_976.csv", se
 if __name__ == "__main__":
     td = TraitementDonnees(simulation=F)
     td.demarrer_acquisition_live(interval=0.1)
-    # Exemple d’utilisation : suppose qu'on a une position (x, y), une puissance estimée et des tensions de photodiodes
-    position = (2.5, -1.5)  # position XY du spot (exemple arbitraire)
-    V_photodiodes = [0.42, 0.35, 0.28, 0.25, 0.2, 0.15]  # tensions simulées (V)
     puissance_estimee = 0.75  # en Watts (exemple arbitraire)
 
     type_lumiere, lambda_nm, puissance_corrigee = get_wavelength(

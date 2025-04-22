@@ -1,6 +1,6 @@
 from mytk import App
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from Traitements_de_données import *
@@ -23,19 +23,23 @@ class MyApp(App):
         self.fichier_simulation = None
         self.start_time = None
 
+        self.running = False
+        self.simulation_completee = False
+        self.donnees_enregistrées = []
+
+        self.build_interface()  # Initialiser l'interface d'abord
+
         if self.arduino_disponible():
             self.simulation_mode = False
             self.td = TraitementDonnees(simulation=False, path="data")
             self.log_mode = "Arduino détecté. Mode acquisition live."
         else:
             self.simulation_mode = True
-            self.afficher_alerte_choix_fichier()
+            self.log_mode = "Arduino non détecté. Mode simulation."
+            self.label_etat.config(text=self.log_mode, foreground="orange")
+            self.log(self.log_mode)
+            self.after(100, self.choisir_csv_interface)
 
-        self.running = False
-        self.simulation_completee = False
-        self.donnees_enregistrées = []
-
-        self.build_interface()
         self.maj_etat_connection()
         self.check_connection_loop()
         self.log(self.log_mode)
@@ -47,15 +51,13 @@ class MyApp(App):
         except:
             return False
 
-    def afficher_alerte_choix_fichier(self):
-        messagebox.showwarning("Alerte", "Arduino non détecté. Veuillez sélectionner un fichier CSV pour la simulation.")
-        self.fichier_simulation = self.selectionner_csv()
-        if not self.fichier_simulation:
-            raise RuntimeError("Aucun fichier CSV sélectionné pour la simulation.")
-        self.rejouer_simulation(self.fichier_simulation)
-
-    def selectionner_csv(self):
-        return filedialog.askopenfilename(initialdir=self.dossier_sauvegarde, title="Choisir un fichier CSV", filetypes=[("Fichiers CSV", "*.csv")])
+    def choisir_csv_interface(self):
+        fichier = filedialog.askopenfilename(initialdir=self.dossier_sauvegarde, title="Choisir un fichier CSV", filetypes=[("Fichiers CSV", "*.csv")])
+        if fichier:
+            self.rejouer_simulation(fichier)
+        else:
+            self.label_etat.config(text="Aucun fichier sélectionné.", foreground="red")
+            self.log("❌ Aucun fichier sélectionné.")
 
     def build_interface(self):
         self.frame = ttk.Frame(self.window.widget, padding=10)
@@ -97,11 +99,14 @@ class MyApp(App):
         self.bouton_start.pack(side="left", padx=10)
         self.bouton_stop = ttk.Button(boutons_frame, text="⏹ Arrêter", command=self.arreter_live)
         self.bouton_stop.pack(side="left", padx=10)
-        self.bouton_csv = ttk.Button(boutons_frame, text="📂 Charger CSV", command=self.rejouer_simulation)
+        self.bouton_csv = ttk.Button(boutons_frame, text="📂 Charger CSV", command=self.choisir_csv_interface)
         self.bouton_csv.pack(side="left", padx=10)
 
         self.label_etat = ttk.Label(self.frame_droite, text="", foreground="red")
         self.label_etat.grid(row=2, column=0, pady=5)
+
+    # Le reste du code (reprendre_simulation, demarrer_live, arreter_live, etc.) reste inchangé
+
 
     def reprendre_simulation(self):
         if self.running:
