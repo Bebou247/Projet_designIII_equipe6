@@ -1,6 +1,6 @@
 from mytk import App
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from Traitements_de_données import *
@@ -22,16 +22,15 @@ class MyApp(App):
         self.simulation_mode = True
         self.fichier_simulation = None
         self.start_time = None
-
         self.running = False
         self.simulation_completee = False
         self.donnees_enregistrées = []
 
-        self.build_interface()  # Initialiser l'interface d'abord
+        self.build_interface()
 
         if self.arduino_disponible():
             self.simulation_mode = False
-            self.td = TraitementDonnees(simulation=False, path="data")
+            self.td = TraitementDonnees(simulation=False, path="data/")
             self.log_mode = "Arduino détecté. Mode acquisition live."
         else:
             self.simulation_mode = True
@@ -46,7 +45,7 @@ class MyApp(App):
 
     def arduino_disponible(self):
         try:
-            test = TraitementDonnees(simulation=False)
+            test = TraitementDonnees(simulation=False, path="data/")
             return test.est_connecte()
         except:
             return False
@@ -80,7 +79,7 @@ class MyApp(App):
 
         self.frame_logs = ttk.LabelFrame(self.frame_gauche, text="📜 Logs système")
         self.frame_logs.pack(fill="both", expand=True, pady=10)
-        self.text_logs = tk.Text(self.frame_logs, height=15, font=("Courier", 10))
+        self.text_logs = tk.Text(self.frame_logs, height=15, font=("Courier", 10), state="disabled")
         self.text_logs.pack(fill="both", expand=True)
 
         self.frame_droite = ttk.Frame(self.frame)
@@ -105,16 +104,14 @@ class MyApp(App):
         self.label_etat = ttk.Label(self.frame_droite, text="", foreground="red")
         self.label_etat.grid(row=2, column=0, pady=5)
 
-    # Le reste du code (reprendre_simulation, demarrer_live, arreter_live, etc.) reste inchangé
-
-
     def reprendre_simulation(self):
         if self.running:
             return
         if self.simulation_mode and self.simulation_completee:
             self.simulation_completee = False
             self.td.simulation_index = 0
-        self.demarrer_live()
+        self.log("▶ Reprise de la simulation")
+        self.after(100, self.demarrer_live)
 
     def demarrer_live(self):
         if self.running:
@@ -138,18 +135,22 @@ class MyApp(App):
         self.bouton_csv.state(["!disabled"])
         self.log("⏹ Acquisition arrêtée")
 
-        if not self.simulation_mode and self.donnees_enregistrées:
-            filename = f"acquisition_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-            filepath = self.dossier_sauvegarde / filename
-            try:
-                with open(filepath, mode='w', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(self.donnees_enregistrées[0].keys())
-                    for row in self.donnees_enregistrées:
-                        writer.writerow(row.values())
-                self.log(f"Données sauvegardées : {filepath}")
-            except Exception as e:
-                self.log(f"Erreur lors de la sauvegarde : {e}")
+        if self.simulation_mode and self.donnees_enregistrées:
+            reponse = messagebox.askyesno("Sauvegarde", "Voulez-vous sauvegarder les données de cette simulation ?")
+            if reponse:
+                filename = f"acquisition_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+                filepath = self.dossier_sauvegarde / filename
+                try:
+                    with open(filepath, mode='w', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(self.donnees_enregistrées[0].keys())
+                        for row in self.donnees_enregistrées:
+                            writer.writerow(row.values())
+                    self.log(f"📅 Données sauvegardées : {filepath}")
+                except Exception as e:
+                    self.log(f"❌ Erreur lors de la sauvegarde : {e}")
+            else:
+                self.log("⛔ Sauvegarde ignorée par l'utilisateur.")
 
     def rejouer_simulation(self, fichier=None):
         if not fichier:
@@ -158,8 +159,8 @@ class MyApp(App):
             return
         self.simulation_mode = True
         self.fichier_simulation = fichier
-        self.td = TraitementDonnees(simulation=True)
-        self.td.simulation_data = pd.read_csv(fichier)
+        self.td = TraitementDonnees(simulation=True, path="data/")
+        self.td.simulation_data = pd.read_csv(fichier, sep=';', decimal=',')
         self.td.simulation_index = 0
         self.simulation_completee = False
         self.label_etat.config(text="Mode simulation.", foreground="orange")
@@ -168,7 +169,9 @@ class MyApp(App):
 
     def log(self, message):
         horodatage = time.strftime("[%H:%M:%S]")
+        self.text_logs.config(state="normal")
         self.text_logs.insert(tk.END, f"{horodatage} {message}\n")
+        self.text_logs.config(state="disabled")
         self.text_logs.see(tk.END)
 
     def maj_etat_connection(self):
@@ -186,8 +189,7 @@ class MyApp(App):
                 elapsed_time = time.time() - self.start_time
                 self.td.afficher_heatmap_dans_figure(data, self.fig, elapsed_time=elapsed_time)
                 self.canvas.draw()
-                puissance = 0.0
-                lambda_nm = 0.0
+                light_type, lambda_nm, puissance = self.td.get_wavelength()
                 self.label_puissance.config(text=f"{puissance:.2f} W")
                 self.label_lambda.config(text=f"{lambda_nm:.1f} nm")
                 row = {k: v for k, v in data.items()}
@@ -204,7 +206,7 @@ class MyApp(App):
     def check_connection_loop(self):
         if not self.td or not self.td.est_connecte():
             if self.arduino_disponible():
-                self.td = TraitementDonnees(simulation=False)
+                self.td = TraitementDonnees(simulation=False, path="data/")
                 self.simulation_mode = False
                 self.label_etat.config(text="Arduino reconnecté", foreground="green")
                 self.log("🔌 Arduino reconnecté")
