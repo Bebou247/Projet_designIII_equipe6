@@ -1,4 +1,3 @@
-
 import serial
 import numpy as np
 from scipy.interpolate import Rbf
@@ -166,7 +165,6 @@ class TraitementDonnees:
 
         self.ser.reset_input_buffer()
         voltages_dict = {}
-        photodiodes_dict = {}
         start_time = time.time()
         timeout_sec = 2 # Augmenté légèrement pour la robustesse
 
@@ -234,19 +232,21 @@ class TraitementDonnees:
 
         # print(f"[DEBUG] Données lues avec succès: {len(voltages_dict)} canaux.") # Debug
 
-        data_phot = []
+        data_phot = [0,0,0,0,0,0]
 
-        for k, v in photodiodes_dict.items():
-            data_phot.append(v)
+        # print(voltages_dict)
+
+        for i in range(25, 31):
+            data_phot[i-25] = voltages_dict[i]
             # print(v)
 
-        print(data_phot)
+        # print(data_phot)
 
         # light_type, wavelength, power = self.get_wavelength()
 
         # print(f"Laser {light_type}, longueur d'onde de {wavelength:.0f} nm et puissance estimée de {power:.2f} W\n")
 
-        # self.data_photodiodes = data_phot
+        self.data_photodiodes = data_phot
 
         # print(voltages_dict)
 
@@ -804,7 +804,10 @@ class TraitementDonnees:
                     valid_temps_count = 0
 
                     for i in range(6):
-                        self.tension_photodidodes[i] = data[self.photodiodes[i]]
+                        try:
+                            self.tension_photodidodes[i] = data[self.photodiodes[i]]
+                        except:
+                            self.tension_photodidodes[i] = 0
 
                     for name, temp in data.items():
                         display_name = name
@@ -931,8 +934,11 @@ class TraitementDonnees:
         V_ratio = [10 * V_corr[i] / self.photodiode_tensions_NIR[i][int(wavelength) - 200] for i in range(6)
                 if self.photodiode_tensions_NIR[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
         return np.mean(V_ratio)
+    
+    def get_IR_power(self):
+        return 10
 
-    def get_wavelength(self, threshold=0.1, threshold_mult=1.25):
+    def get_wavelength(self, threshold=0.5, threshold_mult=0.5):
         if self.last_valid_raw_pos is None:
             y, x = (0, 0)
         else:
@@ -942,26 +948,32 @@ class TraitementDonnees:
 
         V_photodiodes = self.data_photodiodes
 
-        # print(V_photodiodes)
 
-        # V_corr = np.array([self.tension_photodidodes * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
-        # index_max = np.argmax(V_corr)
+        for i, V in enumerate(V_photodiodes):
+            if V < 0.005:
+                V_photodiodes[i] = 0
+            # print(self.correction_matrices[i][pos])
 
-        V_corr = V_photodiodes
+        print(V_photodiodes)
+
+        V_corr = np.array([V * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
         index_max = np.argmax(V_corr)
+
+        # V_corr = V_photodiodes
+        # index_max = np.argmax(V_corr)
 
         # print(V_corr)
 
-        # if all(V < 0.01 for V in V_corr):
-            # return "inconnu", 0, self.puissance
-        if index_max == 0:
+        if all(V < 0.01 for V in V_corr):
+            return "inconnu", 0, 0
+        elif index_max == 0:
             return "UV", 0, self.puissance
         elif index_max == 1:
             self.wavelength = np.mean(self.precise_wavelength(self.get_VIS_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
         elif index_max == 5:
             self.wavelength = np.mean(self.precise_wavelength(self.get_IR_wavelength, V_corr[-1], self.puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
-            return "IR", self.wavelength, self.puissance
+            return "IR", self.wavelength, self.get_IR_power()
         else:
             self.wavelength = np.mean(self.precise_wavelength(self.get_NIR_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "NIR", self.wavelength, self.get_NIR_power(self.wavelength, V_corr)
