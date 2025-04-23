@@ -22,7 +22,7 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem14101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.path = path
         self.port = port
         self.simulation = simulation
@@ -95,9 +95,9 @@ class TraitementDonnees:
             print("[SIMULATION] Mode simulation activé.")
             try:
                 script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 3.csv"
-                self.simulation_data = pd.read_csv(simulation_file_path)
-                #self.simulation_data = pd.read_csv(simulation_file_path, sep = ';', decimal = ',')
+                simulation_file_path = script_dir.parent / "data" / "Échelons 1976 nm.csv"
+                #self.simulation_data = pd.read_csv(simulation_file_path)
+                self.simulation_data = pd.read_csv(simulation_file_path, sep = ',', decimal = '.')
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
 
                 missing_cols = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
@@ -762,11 +762,6 @@ class TraitementDonnees:
             ax.set_xlim(-r_max - 1, r_max + 1)
             ax.set_ylim(-r_max - 1, r_max + 1)
 
-        # --- Ajustement final de la mise en page ---
-        fig.tight_layout(pad=2.5) # Ajusté pad
-
-
-
 
     def demarrer_acquisition_live(self, interval=0.2):
         if not self.est_connecte() and not self.simulation:
@@ -796,10 +791,19 @@ class TraitementDonnees:
                 elapsed_time = current_time - start_time
                 data = self.get_temperatures()
 
-                # print(data)
+                tensions = [0,0,0,0,0,0]
+
+                i = 0
+
+                for k, v in data.items():
+                    if k in self.photodiodes:
+                        tensions[i] = v
+                        i += 1
+
+                self.data_photodiodes = tensions
+
 
                 if data:
-                    #os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
@@ -826,8 +830,7 @@ class TraitementDonnees:
                                 valid_temps_count += 1
                         else:
                             print(f"{display_name:<10} :   --   °C (NaN)")
-                    # real_thermistor_count = len([p for p in self.positions if p[0] not in ["R_Virtuel", "R25"]])
-                    # print(f"({valid_temps_count}/{real_thermistor_count} thermistances réelles (hors R25) valides)")
+
                     print("-" * 60)
                     light_type, wavelength, self.puissance = self.get_wavelength()
                     print(f"Laser {light_type}, longueur d'onde de {wavelength:.0f} nm et puissance estimée de {self.puissance:.2f} W")
@@ -853,10 +856,12 @@ class TraitementDonnees:
                             ligne.append(round(temp_value, 2) if pd.notna(temp_value) else '')
                         else:
                             ligne.append('')
+
                     all_data.append(ligne)
+                    self.all_data = all_data  
+                    print(f"[PUISSANCE TEMP] Estimée = {self.puissance:.3f} W")
 
                 else:
-                    #os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
@@ -940,7 +945,7 @@ class TraitementDonnees:
         return np.mean(V_ratio)
     
     def get_IR_power(self):
-        return 10
+        return self.puissance 
 
     def get_wavelength(self, threshold=0.5, threshold_mult=0.5):
         if self.last_valid_raw_pos is None:
@@ -976,6 +981,7 @@ class TraitementDonnees:
             self.wavelength = np.mean(self.precise_wavelength(self.get_VIS_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
         elif index_max == 5:
+            self.estimate_laser_power_from_csv()
             self.wavelength = np.mean(self.precise_wavelength(self.get_IR_wavelength, V_corr[-1], self.puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "IR", self.wavelength, self.get_IR_power()
         else:
@@ -985,93 +991,119 @@ class TraitementDonnees:
 
 
 
-def estimate_laser_power(temp_initial, temp_measured, time):
-    delta_t = temp_measured - temp_initial
-    K = 0.8411
-    tau = 0.9987
-    coeff = 0.9999
+
+    def estimate_laser_power_from_csv(self, ax=None):
+        if self.simulation:
+            if self.simulation_data is None or self.simulation_data.empty:
+                print("[ERREUR] Données de simulation non disponibles.")
+                self.puissance_est_temp_live = 0
+                return
+            df = self.simulation_data
+        else:
+            if not hasattr(self, 'all_data') or self.all_data is None or len(self.all_data) < 5:
+                print("[ERREUR] Pas assez de données live pour estimer la puissance.")
+                self.puissance_est_temp_live = 0
+                return
+
+            try:
+                headers = [name for name, _ in self.positions if name != "R_Virtuel"] + self.photodiodes + [
+                    "Puissance estimée (W)", "Puissance photodiodes (W)", "timestamp", "temps_ecoule_s"]
+                df = pd.DataFrame(self.all_data, columns=headers)
+                for col in df.columns:
+                    if col != "timestamp":
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+            except Exception as e:
+                print(f"[ERREUR] Conversion live en DataFrame échouée : {e}")
+                self.puissance_est_temp_live = 0
+                return
+
+        thermistances = [col for col in df.columns if col.startswith("R") and col not in ["R25", "R_Virtuel"]]
+        temps = df[thermistances].values
+        ref = df["R25"].values if "R25" in df.columns else 25.0
+        max_temps = np.nanmax(temps, axis=1)
+        delta_T = max_temps - ref
+
+        print(f"[DEBUG] T_max = {max_temps[-1]:.2f} °C, T_ref = {ref[-1]:.2f} °C, delta_T = {delta_T[-1]:.2f} °C")
+
+        if "temps_ecoule_s" not in df.columns:
+            self.puissance_est_temp_live = 0
+            return
+
+        time_vals = df["temps_ecoule_s"].values
+        if len(time_vals) < 5:
+            self.puissance_est_temp_live = 0
+            return
+
+        dt = np.mean(np.diff(time_vals))
+        window = min(len(delta_T) // 2 * 2 + 1, 51)
+        if window < 5:
+            print("[DEBUG] Pas assez de points pour filtrer. Utilisation brute de ΔT.")
+            delta_T_filt = delta_T.copy()
+        else:
+            delta_T_filt = savgol_filter(delta_T, window, 3, mode='interp')
+
+        d_delta_T_dt = np.gradient(delta_T_filt, dt)
+        integral = np.cumsum(delta_T_filt) * dt
+
+        kp = 0.294
+        kd = 12.3
+        ki = 0.00026
+        bias = -0.167
+
     
-    denominator = K * (1 - np.exp(-time/tau))
-    denominator = np.where(denominator < 1e-10, 1e-10, denominator)
+
+        P = kp * delta_T_filt
+        D = kd * d_delta_T_dt
+        I = ki * integral
+        est = P + D - I + bias
+
+       
+
+        est = np.clip(est, 0, None)
+
+        seuil = 0.1
+        edges = np.where(np.abs(np.diff(est)) > seuil)[0] + 1
+        bounds = np.concatenate(([0], edges, [len(est)]))
+        est_liss = np.empty_like(est)
+        for start, end in zip(bounds[:-1], bounds[1:]):
+            est_liss[start:end] = np.mean(est[start:end])
+
+        self.puissance = est_liss[-1] if len(est_liss) > 0 else 0
+
+        if ax is not None:
+            ax.clear()
+            ax.plot(time_vals, est_liss, label="Puissance estimée (température)")
+            ax.set_xlabel("Temps (s)")
+            ax.set_ylabel("Puissance (W)")
+            ax.set_title("Estimation de la puissance (température)")
+            ax.grid(True)
+            ax.legend()
+
+        # else:
+        #     plt.figure()
+        #     plt.plot(time_vals, delta_T, label='ΔT brut')
+        #     plt.plot(time_vals, delta_T_filt, label='ΔT filtré')
+        #     plt.plot(time_vals, est, label='Estimation brute')
+        #     plt.plot(time_vals, est_liss, label='Estimation lissée')
+        #     plt.xlabel("Temps (s)")
+        #     plt.ylabel("Valeurs")
+        #     plt.title("Debug estimation PID")
+        #     plt.grid(True)
+        #     plt.legend()
+        #     plt.show()
+
+
+
+
+
+
+
+
     
-    estimated_power = delta_t / denominator
-    return estimated_power
-
-
-temps = np.linspace(0, 10, 6)  # 100 points de 0 à 10 secondes
-temp_initiale = 25  # température initiale en °C
-temp_heatmap = np.array([30,35,43,32,36,45])  
-
-puissances_estimees = estimate_laser_power(temp_initiale, temp_heatmap, temps)
-print(puissances_estimees)
-
-# Données du CSV
-df = pd.read_csv('C:/Users/emile/Desktop/fichierspython/Design 3/Centre_echelons_test.csv')
-temps  = df.iloc[:, 0:21].values
-ref    = df['R25'].values
-max_temps = temps.max(axis=1)
-delta_T   = max_temps - ref
-dt = 0.5836
-
-# Filtre - dérivée - intégrale
-delta_T_filt = savgol_filter(delta_T, 51, 3)
-d_delta_T_dt = np.gradient(delta_T_filt, dt)
-integral     = np.cumsum(delta_T_filt) * dt
-
-# Échelon de puissance pour comparer ---
-duration         = 60
-samples_per_step = int(round(duration / dt))
-power_steps      = np.array([0, 2.5, 5, 7.5, 10, 7.5, 5, 2.5, 0])
-power_sequence   = np.repeat(power_steps, samples_per_step)
-n = len(delta_T)
-power_vec = np.zeros(n)
-power_vec[:len(power_sequence)] = power_sequence[:n]
-
-time = np.arange(n) * dt
-
-# Coefficients du PID
-init_kp = 0.294
-init_kd = 12.3
-init_ki = 0.00026
-init_b  = -0.167  # intercept
-
-# Calcul de la puissance estimée ---
-est = init_kp * delta_T_filt + init_kd * d_delta_T_dt - init_ki * integral + init_b
-est = np.clip(est, 0, None)
-
-
-# Lissage de la puissance
-seuil = 0.1  # seuil de détection de saut en W
-edges = np.where(np.abs(np.diff(est)) > seuil)[0] + 1
-bounds = np.concatenate(([0], edges, [len(est)]))
-
-est_liss = np.empty_like(est)
-for start, end in zip(bounds[:-1], bounds[1:]):
-    segment = est[start:end]
-    mean_val = segment.mean()
-    est_liss[start:end] = mean_val 
-
-
-# Plot
-fig, ax = plt.subplots(figsize=(10, 6))
-plt.subplots_adjust(left=0.1, bottom=0.3)
-l_real, = ax.plot(time, power_vec, label='Puissance réelle')
-l_est,  = ax.plot(time, est,       label='Puissance estimée')
-l_est_liss,  = ax.plot(time, est_liss,       label='Puissance estimée applatie')
-ax.set_xlabel('Temps (s)')
-ax.set_ylabel('Puissance (W)')
-ax.legend()
-ax.set_xlim(40, 500)
-ax.set_yticks([2.5, 5.0, 7.5, 10.0])
-ax.grid(True, which='both', axis='y')
-
-plt.show()
-
-
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=False)
+    td = TraitementDonnees(simulation=True)
     td.demarrer_acquisition_live(interval=0.1)
-    puissance_estimee = 0.75  # en Watts (exemple arbitraire)
+    #td.estimate_laser_power_from_csv()
 
     # type_lumiere, lambda_nm, puissance_corrigee = get_wavelength(
     #     position=position,
