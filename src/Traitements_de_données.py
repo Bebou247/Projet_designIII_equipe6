@@ -29,6 +29,8 @@ class TraitementDonnees:
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
         self.puissance = 0
         self.data_photodiodes = [0,0,0,0,0,0]
+        self.puissance_hist = [0,0,0,0]
+        self.puissance_hist_2 = [0,0,0,0]
 
         self.correction_matrices = [pd.read_csv(self.path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
         self.photodiode_ratios_VIS = [pd.read_csv(self.path + "ratios_photodiodes_VIS.csv", sep=';', decimal=',')[col].values
@@ -891,8 +893,9 @@ class TraitementDonnees:
                 try:
                     with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
                         writer = csv.writer(f)
-                        writer.writerow(headers)
-                        writer.writerows(all_data)
+                        # writer.writerows(headers)
+                        # writer.writerows(all_data)
+                        writer.writerow(self.puissance_hist_2)
                     print(f"✅ Données sauvegardées dans : {csv_path}")
                 except Exception as e:
                     print(f"❌ Erreur lors de la sauvegarde du CSV : {e}")
@@ -934,7 +937,10 @@ class TraitementDonnees:
         return reduce(np.intersect1d, ratio_ids_corr)
 
     def get_IR_wavelength(self, V_corr, puissance, threshold):
-        ratio = V_corr / puissance
+        if puissance != 0:
+            ratio = V_corr / puissance
+        else:
+            return [0]
         return self.indexes(self.photodiode_ratios_IR, ratio, threshold)
 
     def get_VIS_power(self, wavelength, V_corr):
@@ -964,7 +970,7 @@ class TraitementDonnees:
 
 
         for i, V in enumerate(V_photodiodes):
-            if V < 0.005:
+            if V < 0.05:
                 V_photodiodes[i] = 0
             # print(self.correction_matrices[i][pos])
 
@@ -978,7 +984,7 @@ class TraitementDonnees:
 
         # print(V_corr)
 
-        if all(V < 0.01 for V in V_corr):
+        if all(V < 0.1 for V in V_corr):
             return "inconnu", 0, 0
         elif index_max == 0:
             return "UV", 0, self.puissance
@@ -1006,29 +1012,54 @@ class TraitementDonnees:
             T_ref = float(row["R25"]) if pd.notna(row["R25"]) else 25.0
             delta_T = T_max - T_ref
 
-            # PID simplifié (gain constants à ajuster si besoin)
-            kp = 0.294
-            kd = 12.3
-            ki = 0.00026
-            bias = -0.167
+            print(f"Temp max : {T_max} \nTemp ref : {T_ref}\nDelta temp : {delta_T}")
 
-            dt = 0.2  # tu peux ajuster en fonction du taux d'acquisition
+            # PID simplifié (gain constants à ajuster si besoin)
+            # kp = 0.294*1.1
+            # kd = 12.3/6
+            # ki = 0.00026
+            # bias = -0.167
+            kp = 0.345
+            kd = 4.1
+            kdd = -3.5
+            ki = -0.00175
+            bias = -0.6
+
+            dt = 0.53  # tu peux ajuster en fonction du taux d'acquisition
             if not hasattr(self, "delta_T_hist"):
                 self.delta_T_hist = []
             self.delta_T_hist.append(delta_T)
+            # print(self.delta_T_hist)
 
             if len(self.delta_T_hist) > 100:
                 self.delta_T_hist.pop(0)
 
             delta_T_array = np.array(self.delta_T_hist)
-            delta_T_filt = savgol_filter(delta_T_array, min(len(delta_T_array)//2*2+1, 51), 3, mode='interp') if len(delta_T_array) >= 5 else delta_T_array
+            delta_T_filt = 1/3*(delta_T_array[:-2] + delta_T_array[1:-1] + delta_T_array[2:])
+            # delta_T_filt = savgol_filter(delta_T_array, min(len(delta_T_array)//2*2+1, 15), 3, mode='interp') if len(delta_T_array) >= 5 else delta_T_array
             d_delta_T_dt = np.gradient(delta_T_filt, dt)
             integral = np.cumsum(delta_T_filt) * dt
 
+            dd_delta_T_dt = np.gradient(d_delta_T_dt, dt)
+
             P = kp * delta_T_filt[-1]
             D = kd * d_delta_T_dt[-1]
+            DD = kdd * dd_delta_T_dt[-1]
             I = ki * integral[-1]
-            self.puissance_est_temp_live = max(0, P + D - I + bias)
+            self.puissance_hist.append(max(0, P + D + DD + I + bias))
+
+            # if abs(self.puissance_hist[-5] - self.puissance_hist[-1]) <= 1:
+            #     for _ in range(10):
+            #         self.puissance_hist.append(max(0, P + D + DD + I + bias))
+            puissance = np.mean(self.puissance_hist[-5:])
+
+            if puissance > 0.5:
+                self.puissance = puissance
+            else:
+                self.puissance = 0
+
+            self.puissance_hist_2.append(self.puissance)
+
         except Exception as e:
             print(f"[ERREUR] Estimation ligne unique échouée : {e}")
             self.puissance_est_temp_live = 0
