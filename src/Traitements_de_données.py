@@ -19,12 +19,13 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem14201",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.path = path
         self.port = port
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
         self.puissance = 0
+        self.data_photodiodes = [0,0,0,0,0,0]
 
         self.correction_matrices = [pd.read_csv(self.path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
         self.photodiode_ratios_450 = [pd.read_csv(self.path + "ratios_photodiodes_450.csv", sep=';', decimal=',')[col].values
@@ -41,6 +42,8 @@ class TraitementDonnees:
         decalage_x = -0.4  # vers la gauche
         decalage_y = -0.2  # légèrement plus bas
 
+        self.tension_photodidodes = [0,0,0,0,0,0]
+
         self.positions = [
             ("R1", (11 + decalage_x, 0 + decalage_y)), ("R2", (3 + 1, 0 + decalage_y)), ("R3", (-3 + decalage_x, 0 + decalage_y)), ("R4", (-11 + decalage_x, 0 + decalage_y)),
             ("R5", (8 + 1, 2.5 - decalage_y)), ("R6", (0 + decalage_x, 2.5 + decalage_y)), ("R7", (-8 + decalage_x, 2.5 + decalage_y)), ("R8", (8 + 1, 5.5 - decalage_y)),
@@ -52,9 +55,11 @@ class TraitementDonnees:
             ("R_Virtuel", (-4.9, 7.8))
         ]
 
-        self.indices_à_garder = list(range(21)) # R1-R11, R13-R21 (R24 est sur canal 11)
+        self.photodiodes = ["PD25","PD26","PD27","PD28","PD29","PD30"]
+
+        self.indices_à_garder = list(range(31)) # R1-R11, R13-R21 (R24 est sur canal 11)
         # self.indices_à_garder.append(24) # Si R25 est lue
-        self.indices_photodiodes = list(range(25, 31))
+        # self.indices_photodiodes = list(range(25, 31))
 
         self.simulation_data = None
         self.simulation_index = 150
@@ -62,6 +67,10 @@ class TraitementDonnees:
         if "R25" in [p[0] for p in self.positions] and 24 not in self.indices_à_garder:
              if any(p[0] == "R25" for p in self.positions):
                  self.simulation_columns.append("R25")
+
+        self.simulation_columns += self.photodiodes
+
+        # print(self.simulation_columns)
 
         # --- AJOUT : Pour stocker la carte de température précédente ---
         self.previous_ti_filtered = None
@@ -183,20 +192,20 @@ class TraitementDonnees:
                     if match:
                         canal = int(match.group(1))
                         if canal in self.indices_à_garder:
-                             try:
+                            try:
                                  voltages_dict[canal] = float(match.group(2))
                                  # print(f"[DEBUG] Reçu Canal {canal}: {voltages_dict[canal]} V") # Debug
-                             except ValueError:
+                            except ValueError:
                                  print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
                                  voltages_dict[canal] = np.nan
 
-                        if canal in self.indices_photodiodes:
-                             try:
-                                 photodiodes_dict[canal] = float(match.group(2))
-                                 # print(f"[DEBUG] Reçu Canal {canal}: {voltages_dict[canal]} V") # Debug
-                             except ValueError:
-                                 print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
-                                 photodiodes_dict[canal] = np.nan
+                        # if canal in self.indices_photodiodes:
+                        #      try:
+                        #          photodiodes_dict[canal] = float(match.group(2))
+                        #          # print(f"[DEBUG] Reçu Canal {canal}: {voltages_dict[canal]} V") # Debug
+                        #      except ValueError:
+                        #          print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
+                        #          photodiodes_dict[canal] = np.nan
                 else:
                     # Petite pause pour ne pas saturer le CPU si rien n'est reçu
                     time.sleep(0.01)
@@ -229,14 +238,21 @@ class TraitementDonnees:
 
         for k, v in photodiodes_dict.items():
             data_phot.append(v)
-            print(v)
+            # print(v)
 
-        self.data_photodiodes = data_phot
+        # light_type, wavelength, power = self.get_wavelength()
+
+        # print(f"Laser {light_type}, longueur d'onde de {wavelength:.0f} nm et puissance estimée de {power:.2f} W\n")
+
+        # self.data_photodiodes = data_phot
+
+        # print(voltages_dict)
 
         return voltages_dict
 
     def get_temperatures(self):
         real_temps_dict = {} # Dictionnaire pour les températures réelles
+        real_tension_dict = {} # Dictionnaire pour les tensions réelles
 
         if self.simulation:
             # --- Logique Simulation CSV ---
@@ -272,6 +288,15 @@ class TraitementDonnees:
                          else:
                              real_temps_dict["R25"] = np.nan
 
+                for i, name in enumerate(self.photodiodes):
+                    if name in self.simulation_columns:
+                        if name in current_data_row and pd.notna(current_data_row[name]):
+                            real_temps_dict[name] = current_data_row[name]
+                            valid_data_found = True
+                        else:
+                            real_temps_dict[name] = 0 # Mettre NaN si absent ou non numérique
+
+
                 # Si aucune donnée valide n'a été trouvée (hors R24/Virtuelle)
                 if not valid_data_found:
                     print(f"[AVERTISSEMENT SIMULATION] Aucune donnée valide (hors R24/Virtuelle) à l'index CSV {self.simulation_index - 1}.")
@@ -293,6 +318,11 @@ class TraitementDonnees:
                     # Exclure R25 et celles avec poids spécifique, et vérifier validité
                     if name != "R25" and name not in thermistors_r24_weights and pd.notna(temp):
                          other_thermistors_for_r24.append(name)
+                    if name != "R25" and name not in thermistors_r24_weights and pd.notna(temp):
+                         other_thermistors_for_r24.append(name)
+
+                for name, tension in real_tension_dict.items():
+                    pass
 
                 # Calculer le poids pour les "autres" thermistances (pour R24)
                 weight_per_other_r24 = 0.0
@@ -365,10 +395,10 @@ class TraitementDonnees:
             data_voltages = self.lire_donnees()
             if data_voltages is None:
                  # Si lire_donnees retourne None (erreur ou incomplet), remplir avec NaN
-                 for i, (name, _) in enumerate(self.positions):
+                for i, (name, _) in enumerate(self.positions):
                      # Initialiser toutes les positions (y compris R_Virtuel) à NaN
-                     real_temps_dict[name] = np.nan
-                 return real_temps_dict # Retourner le dict rempli de NaN
+                    real_temps_dict[name] = np.nan
+                return real_temps_dict # Retourner le dict rempli de NaN
 
             temperatures_raw = {}
             # Mapping Nom -> Index Canal (pour lecture voltage)
@@ -378,7 +408,7 @@ class TraitementDonnees:
                 "R8": 7, "R9": 8, "R10": 9, "R11": 10, # Canal 11 est pour R24 physiquement
                 "R13": 12, "R14": 13, "R15": 14, "R16": 15, "R17": 16, "R18": 17,
                 "R19": 18, "R20": 19, "R21": 20,
-                # "R25": 24 # Décommenter si R25 est lue sur le canal 24
+                "R25": 24 # Décommenter si R25 est lue sur le canal 24
             }
             # Mapping Nom -> Index Coefficient (pour calcul température)
             coeffs_mapping = {
@@ -387,7 +417,7 @@ class TraitementDonnees:
                 # R24 (coeffs[23]) sera calculée par moyenne pondérée, pas directement ici
                 "R13": 12, "R14": 13, "R15": 14, "R16": 15, "R17": 16, "R18": 17,
                 "R19": 18, "R20": 19, "R21": 20,
-                # "R25": 24 # Décommenter si R25 utilise coeffs[24]
+                "R25": 24 # Décommenter si R25 utilise coeffs[24]
             }
 
             # Calcul initial des températures réelles (SAUF R24)
@@ -510,6 +540,10 @@ class TraitementDonnees:
             virtual_temp = np.nan # Si aucune thermistance valide pour la moyenne
 
         real_temps_dict["R_Virtuel"] = virtual_temp # Ajouter la virtuelle au dict final
+
+        if not self.simulation:
+            for i, name in enumerate(self.photodiodes):
+                real_temps_dict[name] = data_voltages[i + 25]
 
         return real_temps_dict
 
@@ -740,8 +774,8 @@ class TraitementDonnees:
 
         all_data = []
         base_headers = [name for name, _ in self.positions]
-        extra_headers = ["T_ref", "timestamp", "temps_ecoule_s"]
-        headers = base_headers + extra_headers
+        extra_headers = ["timestamp", "temps_ecoule_s"]
+        headers = base_headers[:-1] + self.photodiodes.copy() + extra_headers
 
         start_time = time.time()
         keep_running = True
@@ -756,6 +790,8 @@ class TraitementDonnees:
                 elapsed_time = current_time - start_time
                 data = self.get_temperatures()
 
+                # print(data)
+
                 if data:
                     #os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
@@ -764,16 +800,28 @@ class TraitementDonnees:
                     print("Températures mesurées")
                     print("-" * 60)
                     valid_temps_count = 0
+
+                    for i in range(6):
+                        self.tension_photodidodes[i] = data[self.photodiodes[i]]
+
                     for name, temp in data.items():
                         display_name = name
                         if pd.notna(temp):
-                            print(f"{display_name:<10} : {temp:6.2f} °C")
+                            if name in self.photodiodes:
+                                print(f"{display_name:<10} : {temp:6.3f}  V")
+                            elif name == "R_Virtuel":
+                                pass
+                            else:
+                                print(f"{display_name:<10} : {temp:6.2f} °C")
                             if name != "R_Virtuel" and name != "R25":
                                 valid_temps_count += 1
                         else:
                             print(f"{display_name:<10} :   --   °C (NaN)")
-                    real_thermistor_count = len([p for p in self.positions if p[0] not in ["R_Virtuel", "R25"]])
-                    print(f"({valid_temps_count}/{real_thermistor_count} thermistances réelles (hors R25) valides)")
+                    # real_thermistor_count = len([p for p in self.positions if p[0] not in ["R_Virtuel", "R25"]])
+                    # print(f"({valid_temps_count}/{real_thermistor_count} thermistances réelles (hors R25) valides)")
+                    print("-" * 60)
+                    light_type, wavelength, self.puissance = self.get_wavelength()
+                    print(f"Laser {light_type}, longueur d'onde de {wavelength:.0f} nm et puissance estimée de {self.puissance:.2f} W")
                     print("=" * 60)
 
                     self.afficher_heatmap_dans_figure(data, fig, elapsed_time)
@@ -882,24 +930,30 @@ class TraitementDonnees:
                 if self.photodiode_tensions_976[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
         return np.mean(V_ratio)
 
-    def get_wavelength(self,threshold=0.1, threshold_mult=1.25):
-        y, x = self.last_valid_raw_pos
-
-        if x is None or y is None:
-            y = 0
-            x = 0
+    def get_wavelength(self, threshold=0.1, threshold_mult=1.25):
+        if self.last_valid_raw_pos is None:
+            y, x = (0, 0)
+        else:
+            y, x = self.last_valid_raw_pos
 
         pos = self.id_pos((x, y))
 
         V_photodiodes = self.data_photodiodes
 
-        V_corr = np.array([V * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
+        # print(V_photodiodes)
+
+        # V_corr = np.array([self.tension_photodidodes * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
+        # index_max = np.argmax(V_corr)
+
+        V_corr = V_photodiodes
         index_max = np.argmax(V_corr)
 
-        if all(V < 0.1 for V in V_corr):
-            return "Unknown", 0, self.puissance
-        elif index_max == 0:
-            return "UV", -200, self.puissance
+        # print(V_corr)
+
+        # if all(V < 0.01 for V in V_corr):
+            # return "inconnu", 0, self.puissance
+        if index_max == 0:
+            return "UV", 0, self.puissance
         elif index_max == 1:
             self.wavelength = np.mean(self.precise_wavelength(self.get_visible_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
@@ -912,7 +966,7 @@ class TraitementDonnees:
 
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=True)
+    td = TraitementDonnees(simulation=False)
     td.demarrer_acquisition_live(interval=0.1)
     puissance_estimee = 0.75  # en Watts (exemple arbitraire)
 
