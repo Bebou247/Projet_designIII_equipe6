@@ -9,6 +9,7 @@ import csv
 from pathlib import Path
 import pandas as pd
 
+
 class MyApp(App):
     def __init__(self):
         super().__init__(name="Interface puissance-mètre")
@@ -31,6 +32,7 @@ class MyApp(App):
         if self.arduino_disponible():
             self.simulation_mode = False
             self.td = TraitementDonnees(simulation=False, path="data/")
+            print("Arduino détecté")
             self.log_mode = "Arduino détecté. Mode acquisition live."
         else:
             self.simulation_mode = True
@@ -116,6 +118,7 @@ class MyApp(App):
     def demarrer_live(self):
         if self.running:
             return
+        self.td = TraitementDonnees(simulation=False, path="data/")
         self.running = True
         self.start_time = time.time()
         self.label_etat.config(text="Lecture en cours.", foreground="blue")
@@ -123,6 +126,7 @@ class MyApp(App):
         self.bouton_csv.state(["disabled"])
         self.log("▶ Acquisition démarrée")
         self.donnees_enregistrées.clear()
+        print("Début des acquisitions de données")
         self.mettre_a_jour_interface()
 
     def arreter_live(self):
@@ -184,12 +188,16 @@ class MyApp(App):
 
     def mettre_a_jour_interface(self):
         if self.running and (self.td.est_connecte() or self.td.simulation):
+            # print(self.td.est_connecte())
+            # print(self.td.ser)
             data = self.td.get_temperatures()
+            print(data)
             if data:
                 elapsed_time = time.time() - self.start_time
                 self.td.afficher_heatmap_dans_figure(data, self.fig, elapsed_time=elapsed_time)
                 self.canvas.draw()
                 light_type, lambda_nm, puissance = self.td.get_wavelength()
+                print(f"Laser de type {light_type}, longueur d'onde de {lambda_nm} et de puissance de {puissance} W")
                 self.label_puissance.config(text=f"{puissance:.2f} W")
                 self.label_lambda.config(text=f"{lambda_nm:.1f} nm")
                 row = {k: v for k, v in data.items()}
@@ -197,6 +205,7 @@ class MyApp(App):
                 self.donnees_enregistrées.append(row)
 
             if self.td.simulation and self.td.simulation_index >= len(self.td.simulation_data):
+                print("WTF")
                 self.simulation_completee = True
                 self.arreter_live()
                 return
@@ -215,3 +224,5 @@ class MyApp(App):
 if __name__ == "__main__":
     app = MyApp()
     app.mainloop()
+
+td = TraitementDonnees()

@@ -22,7 +22,7 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem14101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.path = path
         self.port = port
         self.simulation = simulation
@@ -97,7 +97,7 @@ class TraitementDonnees:
             print("[SIMULATION] Mode simulation activé.")
             try:
                 script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "Échelons 1976 nm.csv"
+                simulation_file_path = script_dir.parent / "data" / "Échelons 976 nm.csv"
                 #self.simulation_data = pd.read_csv(simulation_file_path)
                 self.simulation_data = pd.read_csv(simulation_file_path, sep = ',', decimal = '.')
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -121,7 +121,7 @@ class TraitementDonnees:
                 self.simulation_data = None
         else:
             try:
-                self.ser = serial.Serial(self.port, 9600, timeout=1)
+                self.ser = serial.Serial(self.port, 9600, timeout=0.2)
                 print(f"[INFO] Port série connecté sur {self.port}")
             except Exception as e:
                 print(f"[ERREUR] Impossible d'ouvrir le port série : {e}")
@@ -175,16 +175,23 @@ class TraitementDonnees:
         timeout_sec = 2 # Augmenté légèrement pour la robustesse
 
         while True:
+            # print(self.ser.readline().decode(errors='ignore').strip())
             current_time = time.time()
+
             if current_time - start_time > timeout_sec:
                 print(f"⚠️ Temps de lecture dépassé ({timeout_sec}s), données incomplètes.")
                 # Retourner les données partielles ou None ? Ici on retourne partiel si on a quelque chose.
                 return voltages_dict if voltages_dict else None
+            
+            # print(self.ser.in_waiting)
 
             try:
-                if self.ser.in_waiting > 0:
+                # line = self.ser.readline().decode(errors='ignore').strip()
+                if self.ser.in_waiting >= 0:
+                # if "=== DEBUT BALAYAGE ===" in line:
+                    # print("Ça marche")
                     line = self.ser.readline().decode(errors='ignore').strip()
-                    print(f"[DEBUG RAW] Reçu: '{line}'")
+                    # print(f"[DEBUG RAW] Reçu: '{line}'")
                     if not line:
                         continue
 
@@ -193,6 +200,7 @@ class TraitementDonnees:
                         break # Sortir de la boucle while interne
 
                     match = re.search(r"Canal (\d+): ([\d.]+) V", line)
+                    # print(match)
                     if match:
                         canal = int(match.group(1))
                         if canal in self.indices_à_garder:
@@ -211,6 +219,7 @@ class TraitementDonnees:
                         #          print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
                         #          photodiodes_dict[canal] = np.nan
                 else:
+                    # print("Ça marche pas")
                     # Petite pause pour ne pas saturer le CPU si rien n'est reçu
                     time.sleep(0.01)
 
@@ -770,7 +779,7 @@ class TraitementDonnees:
             ax.set_ylim(-r_max - 1, r_max + 1)
 
 
-    def demarrer_acquisition_live(self, interval=0.2):
+    def demarrer_acquisition_live(self, interval=0.5):
         if not self.est_connecte() and not self.simulation:
             print("Arduino non connecté.")
             return
@@ -866,7 +875,7 @@ class TraitementDonnees:
 
                     all_data.append(ligne)
                     self.all_data = all_data  
-                    print(f"[PUISSANCE TEMP] Estimée = {self.puissance:.3f} W")
+                    # print(f"[PUISSANCE TEMP] Estimée = {self.puissance:.3f} W")
 
                 else:
                     print("=" * 60)
@@ -974,7 +983,7 @@ class TraitementDonnees:
                 V_photodiodes[i] = 0
             # print(self.correction_matrices[i][pos])
 
-        print(V_photodiodes)
+        # print(V_photodiodes)
 
         V_corr = np.array([V * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
         index_max = np.argmax(V_corr)
@@ -987,7 +996,7 @@ class TraitementDonnees:
         if all(V < 0.1 for V in V_corr):
             return "inconnu", 0, 0
         elif index_max == 0:
-            return "UV", 0, self.puissance
+            return "UV", 358, V_corr[0]/0.04
         elif index_max == 1:
             self.wavelength = np.mean(self.precise_wavelength(self.get_VIS_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
@@ -1012,7 +1021,7 @@ class TraitementDonnees:
             T_ref = float(row["R25"]) if pd.notna(row["R25"]) else 25.0
             delta_T = T_max - T_ref
 
-            print(f"Temp max : {T_max} \nTemp ref : {T_ref}\nDelta temp : {delta_T}")
+            # print(f"Temp max : {T_max} \nTemp ref : {T_ref}\nDelta temp : {delta_T}")
 
             # PID simplifié (gain constants à ajuster si besoin)
             # kp = 0.294*1.1
