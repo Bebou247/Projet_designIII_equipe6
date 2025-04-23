@@ -261,11 +261,16 @@ class TraitementDonnees:
         real_tension_dict = {} # Dictionnaire pour les tensions réelles
 
         if self.simulation:
-            # --- Logique Simulation CSV ---
             if self.simulation_data is not None and not self.simulation_data.empty:
                 if self.simulation_index >= len(self.simulation_data):
-                    self.simulation_index = 0 # Retour au début
+                    self.simulation_index = 0
                     print("[SIMULATION] Fin du fichier CSV atteinte, retour au début.")
+
+                current_data_row = self.simulation_data.iloc[self.simulation_index]
+                self.estimate_power_from_row(current_data_row)  # 🔥 appel dynamique ici
+                self.simulation_index += 1
+                # ensuite tu construis real_temps_dict comme tu le fais déjà
+
 
                 # Lire la ligne actuelle
                 current_data_row = self.simulation_data.iloc[self.simulation_index]
@@ -981,7 +986,7 @@ class TraitementDonnees:
             self.wavelength = np.mean(self.precise_wavelength(self.get_VIS_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
         elif index_max == 5:
-            self.estimate_laser_power_from_csv()
+            #self.estimate_power_from_row()
             self.wavelength = np.mean(self.precise_wavelength(self.get_IR_wavelength, V_corr[-1], self.puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "IR", self.wavelength, self.get_IR_power()
         else:
@@ -992,105 +997,53 @@ class TraitementDonnees:
 
 
 
-    def estimate_laser_power_from_csv(self, ax=None):
-        if self.simulation:
-            if self.simulation_data is None or self.simulation_data.empty:
-                print("[ERREUR] Données de simulation non disponibles.")
-                self.puissance_est_temp_live = 0
-                return
-            df = self.simulation_data
-        else:
-            if not hasattr(self, 'all_data') or self.all_data is None or len(self.all_data) < 5:
-                print("[ERREUR] Pas assez de données live pour estimer la puissance.")
-                self.puissance_est_temp_live = 0
-                return
+    def estimate_power_from_row(self, row):
+        try:
+            temp_cols = [col for col in row.index if col.startswith("R") and col not in ["R25", "R_Virtuel"]]
+            temperatures = row[temp_cols].astype(float)
+            T_max = np.nanmax(temperatures)
 
-            try:
-                headers = [name for name, _ in self.positions if name != "R_Virtuel"] + self.photodiodes + [
-                    "Puissance estimée (W)", "Puissance photodiodes (W)", "timestamp", "temps_ecoule_s"]
-                df = pd.DataFrame(self.all_data, columns=headers)
-                for col in df.columns:
-                    if col != "timestamp":
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-            except Exception as e:
-                print(f"[ERREUR] Conversion live en DataFrame échouée : {e}")
-                self.puissance_est_temp_live = 0
-                return
+            T_ref = float(row["R25"]) if pd.notna(row["R25"]) else 25.0
+            delta_T = T_max - T_ref
 
-        thermistances = [col for col in df.columns if col.startswith("R") and col not in ["R25", "R_Virtuel"]]
-        temps = df[thermistances].values
-        ref = df["R25"].values if "R25" in df.columns else 25.0
-        max_temps = np.nanmax(temps, axis=1)
-        delta_T = max_temps - ref
+            # PID simplifié (gain constants à ajuster si besoin)
+            kp = 0.294
+            kd = 12.3
+            ki = 0.00026
+            bias = -0.167
 
-        print(f"[DEBUG] T_max = {max_temps[-1]:.2f} °C, T_ref = {ref[-1]:.2f} °C, delta_T = {delta_T[-1]:.2f} °C")
+            dt = 0.2  # tu peux ajuster en fonction du taux d'acquisition
+            if not hasattr(self, "delta_T_hist"):
+                self.delta_T_hist = []
+            self.delta_T_hist.append(delta_T)
 
-        if "temps_ecoule_s" not in df.columns:
+            if len(self.delta_T_hist) > 100:
+                self.delta_T_hist.pop(0)
+
+            delta_T_array = np.array(self.delta_T_hist)
+            delta_T_filt = savgol_filter(delta_T_array, min(len(delta_T_array)//2*2+1, 51), 3, mode='interp') if len(delta_T_array) >= 5 else delta_T_array
+            d_delta_T_dt = np.gradient(delta_T_filt, dt)
+            integral = np.cumsum(delta_T_filt) * dt
+
+            P = kp * delta_T_filt[-1]
+            D = kd * d_delta_T_dt[-1]
+            I = ki * integral[-1]
+            self.puissance_est_temp_live = max(0, P + D - I + bias)
+        except Exception as e:
+            print(f"[ERREUR] Estimation ligne unique échouée : {e}")
             self.puissance_est_temp_live = 0
-            return
 
-        time_vals = df["temps_ecoule_s"].values
-        if len(time_vals) < 5:
-            self.puissance_est_temp_live = 0
-            return
-
-        dt = np.mean(np.diff(time_vals))
-        window = min(len(delta_T) // 2 * 2 + 1, 51)
-        if window < 5:
-            print("[DEBUG] Pas assez de points pour filtrer. Utilisation brute de ΔT.")
-            delta_T_filt = delta_T.copy()
-        else:
-            delta_T_filt = savgol_filter(delta_T, window, 3, mode='interp')
-
-        d_delta_T_dt = np.gradient(delta_T_filt, dt)
-        integral = np.cumsum(delta_T_filt) * dt
-
-        kp = 0.294
-        kd = 12.3
-        ki = 0.00026
-        bias = -0.167
-
-    
-
-        P = kp * delta_T_filt
-        D = kd * d_delta_T_dt
-        I = ki * integral
-        est = P + D - I + bias
-
-       
-
-        est = np.clip(est, 0, None)
-
-        seuil = 0.1
-        edges = np.where(np.abs(np.diff(est)) > seuil)[0] + 1
-        bounds = np.concatenate(([0], edges, [len(est)]))
-        est_liss = np.empty_like(est)
-        for start, end in zip(bounds[:-1], bounds[1:]):
-            est_liss[start:end] = np.mean(est[start:end])
-
-        self.puissance = est_liss[-1] if len(est_liss) > 0 else 0
-
-        if ax is not None:
-            ax.clear()
-            ax.plot(time_vals, est_liss, label="Puissance estimée (température)")
-            ax.set_xlabel("Temps (s)")
-            ax.set_ylabel("Puissance (W)")
-            ax.set_title("Estimation de la puissance (température)")
-            ax.grid(True)
-            ax.legend()
-
-        # else:
-        #     plt.figure()
-        #     plt.plot(time_vals, delta_T, label='ΔT brut')
-        #     plt.plot(time_vals, delta_T_filt, label='ΔT filtré')
-        #     plt.plot(time_vals, est, label='Estimation brute')
-        #     plt.plot(time_vals, est_liss, label='Estimation lissée')
-        #     plt.xlabel("Temps (s)")
-        #     plt.ylabel("Valeurs")
-        #     plt.title("Debug estimation PID")
-        #     plt.grid(True)
-        #     plt.legend()
-        #     plt.show()
+            #     plt.figure()
+            #     plt.plot(time_vals, delta_T, label='ΔT brut')
+            #     plt.plot(time_vals, delta_T_filt, label='ΔT filtré')
+            #     plt.plot(time_vals, est, label='Estimation brute')
+            #     plt.plot(time_vals, est_liss, label='Estimation lissée')
+            #     plt.xlabel("Temps (s)")
+            #     plt.ylabel("Valeurs")
+            #     plt.title("Debug estimation PID")
+            #     plt.grid(True)
+            #     plt.legend()
+            #     plt.show()
 
 
 
