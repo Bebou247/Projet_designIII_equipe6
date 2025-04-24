@@ -31,6 +31,11 @@ class TraitementDonnees:
         self.data_photodiodes = [0,0,0,0,0,0]
         self.puissance_hist = [0,0,0,0]
         self.puissance_hist_2 = [0,0,0,0]
+        self.puissance_P = [0,0,0,0]
+        self.puissance_I = [0,0,0,0]
+        self.puissance_D = [0,0,0,0]
+        self.puissance_DD = [0,0,0,0]
+        self.time_test = [0, 0, 0]
 
         self.correction_matrices = [pd.read_csv(self.path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
         self.photodiode_ratios_VIS = [pd.read_csv(self.path + "ratios_photodiodes_VIS.csv", sep=';', decimal=',')[col].values
@@ -100,7 +105,7 @@ class TraitementDonnees:
                 if self.fichier_simulation:
                     simulation_file_path = Path(self.fichier_simulation)
                 else:
-                    simulation_file_path = Path(__file__).parent.parent / "data" / "Échelons 976 nm.csv"
+                    simulation_file_path = Path(__file__).parent.parent / "data" / "Échelons 1976 nm.csv"
 
                 self.simulation_data = pd.read_csv(simulation_file_path, sep=';', decimal=',')
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
@@ -517,6 +522,17 @@ class TraitementDonnees:
             else:
                 real_temps_dict["R24"] = np.nan
 
+            # dt = 0.25
+
+            print(self.time_test)
+
+            dt = self.time_test[-1] - self.time_test[-2]
+
+            print(f"dt = {dt} s")
+
+            # self.estimate_power_from_row(data_voltages)
+            self.estimate_power_from_row(real_temps_dict, dt)
+
 
         # --- CALCUL DE LA THERMISTANCE VIRTUELLE (Commun aux deux modes) ---
         # Utilise le `real_temps_dict` qui contient maintenant R1-R11, R13-R21, R24 (calculée), et R25 (si lue/simulée)
@@ -803,6 +819,7 @@ class TraitementDonnees:
 
                 current_time = time.time()
                 elapsed_time = current_time - start_time
+                self.time_test.append(elapsed_time)
                 data = self.get_temperatures()
 
                 tensions = [0,0,0,0,0,0]
@@ -896,13 +913,38 @@ class TraitementDonnees:
                 print("Sauvegarde du fichier CSV...")
                 desktop_path = Path.home() / "Desktop"
                 filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                filename_2 = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}_2.csv"
+                filename_P = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}_P.csv"
+                filename_I = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}_I.csv"
+                filename_D = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}_D.csv"
+                filename_DD = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}_DD.csv"
                 csv_path = desktop_path / filename
+                csv_path_2 = desktop_path / filename_2
+                csv_path_P = desktop_path / filename_P
+                csv_path_I = desktop_path / filename_I
+                csv_path_D = desktop_path / filename_D
+                csv_path_DD = desktop_path / filename_DD
                 try:
                     with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
                         writer = csv.writer(f)
-                        # writer.writerows(headers)
-                        # writer.writerows(all_data)
-                        writer.writerow(self.puissance_hist_2)
+                        writer.writerows(headers)
+                        writer.writerows(all_data)
+                        # writer.writerow(self.puissance_hist_2)
+                    with open(csv_path_2, mode='w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(self.puissance_hist)
+                    with open(csv_path_P, mode='w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(self.puissance_P)
+                    with open(csv_path_I, mode='w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(self.puissance_I)
+                    with open(csv_path_D, mode='w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(self.puissance_D)
+                    with open(csv_path_DD, mode='w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(self.puissance_DD)
                     print(f"✅ Données sauvegardées dans : {csv_path}")
                 except Exception as e:
                     print(f"❌ Erreur lors de la sauvegarde du CSV : {e}")
@@ -975,6 +1017,8 @@ class TraitementDonnees:
 
         V_photodiodes = self.data_photodiodes
 
+        print(V_photodiodes)
+
 
         for i, V in enumerate(V_photodiodes):
             if V < 0.05:
@@ -1010,10 +1054,13 @@ class TraitementDonnees:
 
 
 
-    def estimate_power_from_row(self, row):
+    def estimate_power_from_row(self, row, dt):
         try:
-            temp_cols = [col for col in row.index if col.startswith("R") and col not in ["R25", "R_Virtuel"]]
-            temperatures = row[temp_cols].astype(float)
+            # print(row)
+            # temp_cols = [col for col in row.index if col.startswith("R") and col not in ["R25", "R_Virtuel"]]
+            #temperatures = row[temp_cols].astype(float)
+            print(list(row.values()))
+            temperatures = list(row.values())[:25]
             T_max = np.nanmax(temperatures)
 
             T_ref = float(row["R25"]) if pd.notna(row["R25"]) else 25.0
@@ -1026,13 +1073,18 @@ class TraitementDonnees:
             # kd = 12.3/6
             # ki = 0.00026
             # bias = -0.167
-            kp = 0.345
-            kd = 4.1
-            kdd = -3.5
-            ki = -0.00175
-            bias = -0.6
+            kp = 0.56
+            ki = -0.012
+            kd = 12
+            kdd = -4
+            bias = -0.5
+            #kp = 0.345
+            #kd = 4.1
+            #kdd = -3.5
+            #ki = -0.00175
+            #bias = -0.6
 
-            dt = 0.53  # tu peux ajuster en fonction du taux d'acquisition
+            # dt = 0.25  # tu peux ajuster en fonction du taux d'acquisition
             if not hasattr(self, "delta_T_hist"):
                 self.delta_T_hist = []
             self.delta_T_hist.append(delta_T)
@@ -1054,11 +1106,17 @@ class TraitementDonnees:
             DD = kdd * dd_delta_T_dt[-1]
             I = ki * integral[-1]
             self.puissance_hist.append(max(0, P + D + DD + I + bias))
+            self.puissance_P.append(delta_T_filt[-1])
+            self.puissance_I.append(integral[-1])
+            self.puissance_D.append(d_delta_T_dt[-1])
+            self.puissance_DD.append(dd_delta_T_dt[-1])
 
             # if abs(self.puissance_hist[-5] - self.puissance_hist[-1]) <= 1:
             #     for _ in range(10):
             #         self.puissance_hist.append(max(0, P + D + DD + I + bias))
-            puissance = np.mean(self.puissance_hist[-5:])
+            puissance = np.mean(self.puissance_hist[-10:])
+
+            print(f"Puissance : {puissance} W")
 
             if puissance > 0.5:
                 self.puissance = puissance
