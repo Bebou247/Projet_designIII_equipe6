@@ -6,5 +6,4 @@ mytk
 scipy
 pandas  
 datetime
-serial
 pyserial 
