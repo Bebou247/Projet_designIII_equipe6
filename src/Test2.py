@@ -1,4 +1,3 @@
-
 import serial
 import numpy as np
 from scipy.interpolate import Rbf
@@ -21,7 +20,21 @@ class TraitementDonnees:
     def __init__(self, port="COM4", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.port = port
         self.simulation = simulation
-        self.coefficients = np.load(coeffs_path, allow_pickle=True)
+        # --- Chargement Coefficients ---
+        try:
+            # Utiliser un chemin relatif au script pour coeffs_path
+            script_dir = Path(__file__).parent
+            coeffs_full_path = script_dir.parent / coeffs_path
+            self.coefficients = np.load(coeffs_full_path, allow_pickle=True)
+            print(f"[INFO] Coefficients chargés depuis : {coeffs_full_path.resolve()}")
+        except FileNotFoundError:
+             print(f"[ERREUR] Fichier coefficients non trouvé : {coeffs_full_path.resolve()}")
+             # Optionnel: Lever l'erreur si les coeffs sont essentiels
+             # raise FileNotFoundError(f"Fichier coefficients non trouvé : {coeffs_full_path.resolve()}")
+             self.coefficients = None # Ou définir une valeur par défaut / gérer l'absence
+        except Exception as e:
+             print(f"[ERREUR] Problème chargement coefficients : {e}")
+             self.coefficients = None
 
         # Décalage à appliquer
         decalage_x = -0.4  # vers la gauche
@@ -38,67 +51,105 @@ class TraitementDonnees:
             ("R_Virtuel", (-4.9, 7.8))
         ]
 
-        self.indices_à_garder = list(range(21)) # R1-R11, R13-R21 (R24 est sur canal 11)
-        # self.indices_à_garder.append(24) # Si R25 est lue
+        # Indices des canaux à lire sur l'Arduino (0-20 pour R1-R11, R13-R21)
+        # Le canal 11 (R24) est lu mais sa valeur est recalculée.
+        self.indices_à_garder = list(range(21))
+        # Décommenter si R25 est lue physiquement (ex: sur canal 24)
+        # self.indices_à_garder.append(24)
 
         self.simulation_data = None
         self.simulation_index = 0
-        self.simulation_columns = [p[0] for i, p in enumerate(self.positions) if p[0] != "R_Virtuel" and i in self.indices_à_garder]
-        if "R25" in [p[0] for p in self.positions] and 24 not in self.indices_à_garder:
-             if any(p[0] == "R25" for p in self.positions):
-                 self.simulation_columns.append("R25")
+        # Définir les colonnes attendues pour la simulation
+        # Inclut les thermistances réelles (sauf R_Virtuel) et R25 si elle est définie dans positions
+        self.simulation_columns = [p[0] for p in self.positions if p[0] != "R_Virtuel"]
+        # Note: R24 est incluse ici car elle est dans self.positions, même si calculée différemment
 
-        # --- AJOUT : Pour stocker la carte de température précédente ---
+        # --- Initialisations pour les heatmaps et le filtrage ---
         self.previous_ti_filtered = None
-        # --- FIN AJOUT ---
-        # --- AJOUT : Pour stocker la carte de température précédente ---
-        self.previous_ti_filtered = None
-        # --- FIN AJOUT ---
-
-        # --- AJOUT : Pour le filtrage de position ---
-        self.position_history = [] # Historique pour la médiane mobile
-        self.history_length = 5    # Nombre de positions à garder (ajustable)
-        self.last_valid_raw_pos = None # Dernière position brute jugée valide (pour limite vitesse)
-        self.last_filtered_pos = (None, None) # Dernière position filtrée (pour affichage)
-        self.max_speed_mm_per_interval = 3.0 # Max déplacement en mm entre frames (ajustable)
+        self.position_history = []
+        self.history_length = 5
+        self.last_valid_raw_pos = None
+        self.last_filtered_pos = (None, None)
+        self.max_speed_mm_per_interval = 3.0
         self.min_heating_threshold = 0.20
-        # --- FIN AJOUT ---
+        # --- FIN Initialisations ---
+
+        # --- Bloc Simulation ---
         if self.simulation:
             self.ser = None
             print("[SIMULATION] Mode simulation activé.")
             try:
                 script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "10 W hauteur 1 (droite à gauche).csv"
-                #self.simulation_data = pd.read_csv(simulation_file_path)
-                self.simulation_data = pd.read_csv(simulation_file_path, sep = ';', decimal = ',')
-                print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
+                # Assurez-vous que le nom du fichier est correct
+                simulation_file_path = script_dir.parent / "data" / "Test-echelon-976-nm-2025-04-24.csv"
 
-                missing_cols = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
+                # Vérifier si le fichier existe
+                if not simulation_file_path.is_file():
+                     raise FileNotFoundError(f"Fichier simulation non trouvé: {simulation_file_path.resolve()}")
+
+                # --- MODIFICATION ICI : Ajout de nrows=42 ---
+                self.simulation_data = pd.read_csv(
+                    simulation_file_path,
+                    sep=';',      # Séparateur virgule
+                    decimal='.',  # Séparateur décimal point
+                    nrows=30      # Lire seulement les 42 premières lignes
+                    # on_bad_lines='warn' # Optionnel: avertir si des lignes > 42 ont des problèmes
+                )
+                # --- FIN MODIFICATION ---
+
+                print(f"[SIMULATION] Chargement des {len(self.simulation_data)} premières lignes du fichier CSV : {simulation_file_path.resolve()}")
+                print("[DEBUG SIMULATION] Colonnes lues depuis le CSV:", self.simulation_data.columns.tolist())
+                print("[DEBUG SIMULATION] Aperçu des 5 premières lignes lues:")
+                print(self.simulation_data.head()) # Afficher un aperçu
+
+                # --- Vérification et Conversion des Données ---
+                colonnes_lues = self.simulation_data.columns.tolist()
+                missing_cols = [col for col in self.simulation_columns if col not in colonnes_lues]
                 if missing_cols:
-                    print(f"[ERREUR SIMULATION] Colonnes manquantes dans {simulation_file_path.name}: {missing_cols}")
-                    self.simulation_data = None
-                else:
-                    for col in self.simulation_columns:
-                        self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
-                    print(f"[SIMULATION] Fichier CSV chargé. {len(self.simulation_data)} lignes trouvées.")
-                    if self.simulation_data.isnull().values.any():
-                        print("[AVERTISSEMENT SIMULATION] Le fichier CSV contient des valeurs non numériques après conversion.")
+                    print(f"[AVERTISSEMENT SIMULATION] Colonnes attendues mais non trouvées dans le CSV: {missing_cols}")
+                    # Ne pas mettre self.simulation_data à None ici, continuer avec les colonnes disponibles
 
-            except FileNotFoundError:
-                print(f"[ERREUR SIMULATION] Fichier non trouvé : {simulation_file_path.resolve()}")
-                self.simulation_data = None
+                # Appliquer la conversion numérique aux colonnes attendues qui existent
+                colonnes_a_convertir = [col for col in self.simulation_columns if col in colonnes_lues]
+                for col in colonnes_a_convertir:
+                    # Utiliser .loc pour éviter SettingWithCopyWarning
+                    try:
+                        self.simulation_data.loc[:, col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
+                    except Exception as e_num:
+                         print(f"[AVERTISSEMENT SIMULATION] Problème conversion numérique colonne '{col}': {e_num}")
+
+                print(f"[SIMULATION] {len(self.simulation_data)} lignes CSV chargées et traitées.")
+                if self.simulation_data.isnull().values.any():
+                    print("[AVERTISSEMENT SIMULATION] Le fichier CSV (premières lignes) contient des valeurs non numériques ou manquantes après conversion.")
+
+            except FileNotFoundError as e:
+                print(f"[ERREUR SIMULATION] {e}")
+                self.simulation_data = None # Mettre à None si fichier non trouvé
             except Exception as e:
                 print(f"[ERREUR SIMULATION] Impossible de charger ou lire le fichier CSV : {e}")
-                self.simulation_data = None
+                import traceback
+                traceback.print_exc() # Afficher la trace complète de l'erreur
+                self.simulation_data = None # Mettre à None en cas d'autre erreur
+        # --- Fin Bloc Simulation ---
+
+        # --- Bloc Connexion Série ---
         else:
             try:
-                self.ser = serial.Serial(self.port, 9600, timeout=1)
+                # Timeout court pour réactivité
+                self.ser = serial.Serial(self.port, 9600, timeout=0.5)
                 print(f"[INFO] Port série connecté sur {self.port}")
-            except Exception as e:
-                print(f"[ERREUR] Impossible d'ouvrir le port série : {e}")
+                # Petite pause pour laisser l'Arduino s'initialiser
+                time.sleep(1.5)
+                self.ser.reset_input_buffer() # Vider buffer au cas où
+            except serial.SerialException as e:
+                print(f"[ERREUR] Impossible d'ouvrir le port série {self.port}: {e}")
                 self.ser = None
+            except Exception as e:
+                print(f"[ERREUR] Autre erreur connexion série: {e}")
+                self.ser = None
+        # --- Fin Bloc Connexion Série ---
 
-    # ... (autres méthodes : est_connecte, steinhart_hart_temperature, compute_resistance, compute_temperature, lire_donnees, get_temperatures restent identiques) ...
+    # ... (le reste de vos méthodes : est_connecte, steinhart_hart_temperature, etc.) ...
     def est_connecte(self):
         return self.ser is not None
 
@@ -125,8 +176,15 @@ class TraitementDonnees:
         return resistance
 
     def compute_temperature(self, resistance, coeffs):
+        if self.coefficients is None:
+             print("[ERREUR] Coefficients non chargés, impossible de calculer la température.")
+             return np.nan
         if resistance == float('inf') or resistance <= 0 or pd.isna(resistance):
             return np.nan
+        # S'assurer que coeffs est bien un tuple/liste de 3 éléments
+        if not isinstance(coeffs, (list, tuple, np.ndarray)) or len(coeffs) != 3:
+             print(f"[ERREUR] Format de coefficients invalide: {coeffs}")
+             return np.nan
         A, B, C = coeffs
         kelvin = self.steinhart_hart_temperature(resistance, A, B, C)
         if pd.isna(kelvin):
@@ -135,6 +193,9 @@ class TraitementDonnees:
 
     def lire_donnees(self):
         if self.simulation:
+            # En simulation, on ne lit pas de l'Arduino, on utilise self.simulation_data
+            # Cette fonction pourrait retourner True si les données sont prêtes, ou rien.
+            # Pour la compatibilité, on retourne True si les données sont chargées.
             return self.simulation_data is not None and not self.simulation_data.empty
 
         if self.ser is None:
@@ -144,62 +205,61 @@ class TraitementDonnees:
         self.ser.reset_input_buffer()
         voltages_dict = {}
         start_time = time.time()
-        timeout_sec = 2 # Augmenté légèrement pour la robustesse
+        timeout_sec = 2 # Timeout pour recevoir toutes les données
 
         while True:
             current_time = time.time()
             if current_time - start_time > timeout_sec:
                 print(f"⚠️ Temps de lecture dépassé ({timeout_sec}s), données incomplètes.")
-                # Retourner les données partielles ou None ? Ici on retourne partiel si on a quelque chose.
-                return voltages_dict if voltages_dict else None
+                # Retourner None si incomplet est plus sûr
+                return None
 
             try:
                 if self.ser.in_waiting > 0:
                     line = self.ser.readline().decode(errors='ignore').strip()
+                    # print(f"[DEBUG RAW] Reçu: '{line}'") # Décommenter pour voir tout ce qui arrive
                     if not line:
                         continue
 
                     if "Fin du balayage" in line:
-                        # print("[DEBUG] Fin du balayage détectée.") # Debug
-                        break # Sortir de la boucle while interne
+                        # print("[DEBUG] Fin du balayage détectée.")
+                        break # Sortir de la boucle while
 
                     match = re.search(r"Canal (\d+): ([\d.]+) V", line)
                     if match:
                         canal = int(match.group(1))
+                        # Lire seulement les canaux définis dans indices_à_garder
                         if canal in self.indices_à_garder:
                              try:
                                  voltages_dict[canal] = float(match.group(2))
-                                 # print(f"[DEBUG] Reçu Canal {canal}: {voltages_dict[canal]} V") # Debug
+                                 # print(f"[DEBUG] Reçu Canal {canal}: {voltages_dict[canal]} V")
                              except ValueError:
                                  print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
-                                 voltages_dict[canal] = np.nan
+                                 voltages_dict[canal] = np.nan # Marquer comme invalide
                 else:
                     # Petite pause pour ne pas saturer le CPU si rien n'est reçu
                     time.sleep(0.01)
 
             except serial.SerialException as e:
-                print(f"Erreur série pendant la lecture : {e}")
+                print(f"[ERREUR] Erreur série pendant la lecture : {e}")
                 self.ser = None # Marquer comme déconnecté
                 return None
             except Exception as e:
-                print(f"Erreur inattendue pendant la lecture série : {e}")
-                # Continuer la boucle peut être risqué, mais on essaie
-                continue
+                print(f"[ERREUR] Erreur inattendue pendant la lecture série : {e}")
+                # Continuer peut être risqué, retourner None est plus sûr
+                return None
 
-        # Vérification après la sortie de boucle (Fin du balayage ou timeout)
+        # Vérification après la sortie de boucle (Fin du balayage)
         canaux_attendus = set(self.indices_à_garder)
         canaux_recus = set(voltages_dict.keys())
 
         if canaux_recus != canaux_attendus:
              canaux_manquants = canaux_attendus - canaux_recus
              print(f"⚠️ Seulement {len(canaux_recus)}/{len(canaux_attendus)} canaux requis reçus. Manquants: {sorted(list(canaux_manquants))}")
-             # Option: Remplir les manquants avec NaN si on veut quand même continuer
-             # for canal_manquant in canaux_manquants:
-             #     voltages_dict[canal_manquant] = np.nan
-             # return voltages_dict # Retourner données partielles + NaN
-             return None # Préférable de retourner None si incomplet
+             # Retourner None si incomplet
+             return None
 
-        # print(f"[DEBUG] Données lues avec succès: {len(voltages_dict)} canaux.") # Debug
+        # print(f"[DEBUG] Données lues avec succès: {len(voltages_dict)} canaux.")
         return voltages_dict
 
     def get_temperatures(self):
@@ -209,13 +269,18 @@ class TraitementDonnees:
             # --- Logique Simulation CSV ---
             if self.simulation_data is not None and not self.simulation_data.empty:
                 if self.simulation_index >= len(self.simulation_data):
-                    self.simulation_index = 0 # Retour au début
-                    print("[SIMULATION] Fin du fichier CSV atteinte, retour au début.")
+                    # Atteint la fin des lignes lues (nrows=42)
+                    print(f"[SIMULATION] Fin des {len(self.simulation_data)} lignes CSV lues.")
+                    # Option 1: Arrêter (retourner un dict vide ou None pour signaler la fin)
+                    # return {}
+                    # Option 2: Boucler (recommencer au début)
+                    self.simulation_index = 0
+                    print("[SIMULATION] Retour au début du fichier CSV.")
 
                 # Lire la ligne actuelle
                 current_data_row = self.simulation_data.iloc[self.simulation_index]
-                # Incrémenter pour la prochaine lecture (peut être ajusté)
-                self.simulation_index += 2 # Lire chaque ligne
+                # Incrémenter pour la prochaine lecture
+                self.simulation_index += 1
                 valid_data_found = False
 
                 # Lire les températures simulées pour les thermistances réelles (SAUF R24 pour l'instant)
@@ -223,19 +288,25 @@ class TraitementDonnees:
                     if name in ["R_Virtuel", "R24"]: continue # Ignorer la virtuelle et R24 ici
 
                     # Cas général pour les thermistances dans simulation_columns
-                    if name in self.simulation_columns:
-                        if name in current_data_row and pd.notna(current_data_row[name]):
-                            real_temps_dict[name] = current_data_row[name]
-                            valid_data_found = True
+                    if name in self.simulation_data.columns: # Vérifier si colonne existe
+                        if name in current_data_row.index and pd.notna(current_data_row[name]):
+                            try:
+                                real_temps_dict[name] = float(current_data_row[name])
+                                valid_data_found = True
+                            except (ValueError, TypeError):
+                                real_temps_dict[name] = np.nan
                         else:
-                            real_temps_dict[name] = np.nan # Mettre NaN si absent ou non numérique
+                            real_temps_dict[name] = np.nan # Mettre NaN si absent ou déjà NaN
 
                     # Cas spécifique pour R25 si elle est dans 'positions' mais pas lue directement
                     # et si elle existe dans le CSV
                     elif name == "R25" and "R25" in self.simulation_data.columns:
-                         if "R25" in current_data_row and pd.notna(current_data_row["R25"]):
-                             real_temps_dict["R25"] = current_data_row["R25"]
-                             valid_data_found = True # Compte comme donnée valide
+                         if "R25" in current_data_row.index and pd.notna(current_data_row["R25"]):
+                             try:
+                                 real_temps_dict["R25"] = float(current_data_row["R25"])
+                                 valid_data_found = True # Compte comme donnée valide
+                             except (ValueError, TypeError):
+                                 real_temps_dict["R25"] = np.nan
                          else:
                              real_temps_dict["R25"] = np.nan
 
@@ -245,57 +316,48 @@ class TraitementDonnees:
                     # Initialiser R24 et R_Virtuel à NaN avant de retourner
                     real_temps_dict["R24"] = np.nan
                     real_temps_dict["R_Virtuel"] = np.nan
-                    return real_temps_dict # Retourne le dict avec potentiellement que des NaN
+                    # Retourner le dict même s'il est plein de NaN
+                    return real_temps_dict
 
                 # --- Logique R24 (Moyenne Pondérée) pour Simulation ---
-                # (Identique à avant, utilise real_temps_dict rempli ci-dessus)
                 weighted_sum_r24 = 0.0
                 total_weight_r24 = 0.0
-                # --- MODIFIÉ : Poids ajustés pour R24 ---
                 thermistors_r24_weights = {"R19": 0.1, "R20": 0.15, "R21": 0.15} # 40%
                 other_thermistors_for_r24 = []
 
-                # Identifier les autres thermistances réelles valides (pour R24)
                 for name, temp in real_temps_dict.items():
-                    # Exclure R25 et celles avec poids spécifique, et vérifier validité
                     if name != "R25" and name not in thermistors_r24_weights and pd.notna(temp):
                          other_thermistors_for_r24.append(name)
 
-                # Calculer le poids pour les "autres" thermistances (pour R24)
                 weight_per_other_r24 = 0.0
                 if other_thermistors_for_r24:
-                    # Les autres se partagent 60% du poids
                     weight_per_other_r24 = 0.6 / len(other_thermistors_for_r24)
 
-                # Calculer la somme pondérée et le poids total (pour R24)
                 for name, temp in real_temps_dict.items():
-                     if name == "R25": continue # Exclure R25
+                     if name == "R25": continue
                      if pd.notna(temp):
                          if name in thermistors_r24_weights:
                              weight = thermistors_r24_weights[name]
                          elif name in other_thermistors_for_r24:
                              weight = weight_per_other_r24
-                         else:
-                             continue # Ignorer si non pertinent pour R24
-
+                         else: continue
                          weighted_sum_r24 += temp * weight
                          total_weight_r24 += weight
 
-                # Assigner la valeur à R24
-                if total_weight_r24 > 1e-6: # Éviter division par zéro
+                if total_weight_r24 > 1e-6:
                     real_temps_dict["R24"] = weighted_sum_r24 / total_weight_r24
                 else:
-                    real_temps_dict["R24"] = np.nan # Si aucun contributeur valide
+                    real_temps_dict["R24"] = np.nan
 
             else:
                 # Fallback si CSV échoue ou est vide
                 print("[SIMULATION] Données CSV non disponibles ou vides, génération de températures aléatoires.")
                 temp_gen_dict = {}
                 for i, (name, _) in enumerate(self.positions):
-                     if name != "R_Virtuel": # Ne pas générer pour la virtuelle initialement
-                         temp_gen_dict[name] = np.random.uniform(20.0, 35.0) # Plage réaliste
+                     if name != "R_Virtuel":
+                         temp_gen_dict[name] = np.random.uniform(20.0, 35.0)
 
-                # Calculer R24 à partir des valeurs générées (logique similaire à ci-dessus)
+                # Calculer R24 à partir des valeurs générées
                 weighted_sum_r24_gen = 0.0
                 total_weight_r24_gen = 0.0
                 thermistors_r24_weights_gen = {"R19": 0.1, "R20": 0.15, "R21": 0.15}
@@ -311,60 +373,52 @@ class TraitementDonnees:
 
                 for name, temp in temp_gen_dict.items():
                      if name != "R24" and name != "R25" and pd.notna(temp):
-                         if name in thermistors_r24_weights_gen:
-                             weight = thermistors_r24_weights_gen[name]
-                         elif name in other_thermistors_for_r24_gen:
-                             weight = weight_per_other_gen_r24
-                         else:
-                             continue
+                         if name in thermistors_r24_weights_gen: weight = thermistors_r24_weights_gen[name]
+                         elif name in other_thermistors_for_r24_gen: weight = weight_per_other_gen_r24
+                         else: continue
                          weighted_sum_r24_gen += temp * weight
                          total_weight_r24_gen += weight
 
-                if total_weight_r24_gen > 1e-6:
-                    temp_gen_dict["R24"] = weighted_sum_r24_gen / total_weight_r24_gen
-                else:
-                    temp_gen_dict["R24"] = np.nan
+                if total_weight_r24_gen > 1e-6: temp_gen_dict["R24"] = weighted_sum_r24_gen / total_weight_r24_gen
+                else: temp_gen_dict["R24"] = np.nan
 
-                real_temps_dict = temp_gen_dict # Assigner le dict généré
+                real_temps_dict = temp_gen_dict
 
         else:
             # --- Logique Lecture Série ---
+            if self.coefficients is None:
+                 print("[ERREUR] Coefficients non chargés, impossible de calculer les températures.")
+                 # Remplir avec NaN
+                 for i, (name, _) in enumerate(self.positions): real_temps_dict[name] = np.nan
+                 return real_temps_dict
+
             data_voltages = self.lire_donnees()
             if data_voltages is None:
-                 # Si lire_donnees retourne None (erreur ou incomplet), remplir avec NaN
-                 for i, (name, _) in enumerate(self.positions):
-                     # Initialiser toutes les positions (y compris R_Virtuel) à NaN
-                     real_temps_dict[name] = np.nan
-                 return real_temps_dict # Retourner le dict rempli de NaN
+                 for i, (name, _) in enumerate(self.positions): real_temps_dict[name] = np.nan
+                 return real_temps_dict
 
             temperatures_raw = {}
-            # Mapping Nom -> Index Canal (pour lecture voltage)
-            # R24 n'est pas listée ici car elle n'est pas lue directement via son nom
-            indices_mapping = {
+            indices_mapping = { # Nom -> Index Canal
                 "R1": 0, "R2": 1, "R3": 2, "R4": 3, "R5": 4, "R6": 5, "R7": 6,
-                "R8": 7, "R9": 8, "R10": 9, "R11": 10, # Canal 11 est pour R24 physiquement
+                "R8": 7, "R9": 8, "R10": 9, "R11": 10, # Canal 11 est R24 physiquement
                 "R13": 12, "R14": 13, "R15": 14, "R16": 15, "R17": 16, "R18": 17,
                 "R19": 18, "R20": 19, "R21": 20,
-                # "R25": 24 # Décommenter si R25 est lue sur le canal 24
+                # "R25": 24
             }
-            # Mapping Nom -> Index Coefficient (pour calcul température)
-            coeffs_mapping = {
+            coeffs_mapping = { # Nom -> Index Coefficient
                 "R1": 0, "R2": 1, "R3": 2, "R4": 3, "R5": 4, "R6": 5, "R7": 6,
                 "R8": 7, "R9": 8, "R10": 9, "R11": 10,
-                # R24 (coeffs[23]) sera calculée par moyenne pondérée, pas directement ici
+                # R24 (coeffs[23]) sera calculée
                 "R13": 12, "R14": 13, "R15": 14, "R16": 15, "R17": 16, "R18": 17,
                 "R19": 18, "R20": 19, "R21": 20,
-                # "R25": 24 # Décommenter si R25 utilise coeffs[24]
+                # "R25": 24
             }
 
             # Calcul initial des températures réelles (SAUF R24)
             for nom_thermistor, canal_index in indices_mapping.items():
-                # Le canal 11 est physiquement connecté à R24, on l'ignore ici
-                # car R24 est calculée par moyenne pondérée plus tard.
-                if canal_index == 11: continue
+                if canal_index == 11: continue # Ignorer canal 11 (R24)
 
                 if canal_index not in data_voltages or pd.isna(data_voltages[canal_index]):
-                    print(f"[AVERTISSEMENT] Tension manquante ou invalide pour {nom_thermistor} (canal {canal_index})")
                     temperatures_raw[nom_thermistor] = np.nan
                     continue
 
@@ -372,7 +426,6 @@ class TraitementDonnees:
                 coeffs_index = coeffs_mapping.get(nom_thermistor, -1)
 
                 if coeffs_index == -1 or coeffs_index >= len(self.coefficients):
-                    print(f"[ERREUR] Index coeff {coeffs_index} invalide pour {nom_thermistor}.")
                     temperatures_raw[nom_thermistor] = np.nan
                     continue
 
@@ -381,115 +434,85 @@ class TraitementDonnees:
                 temp = self.compute_temperature(resistance, coeffs)
                 temperatures_raw[nom_thermistor] = temp
 
-            # Gérer R25 si elle est lue physiquement
+            # Gérer R25 si lue
             # if 24 in self.indices_à_garder and 24 in data_voltages:
             #     if pd.notna(data_voltages[24]):
             #         voltage_r25 = data_voltages[24]
-            #         coeffs_r25 = self.coefficients[24] # Assumer coeffs[24] pour R25
+            #         coeffs_r25 = self.coefficients[24]
             #         resistance_r25 = self.compute_resistance(voltage_r25)
             #         temp_r25 = self.compute_temperature(resistance_r25, coeffs_r25)
             #         temperatures_raw["R25"] = temp_r25
-            #     else:
-            #         temperatures_raw["R25"] = np.nan
-            # elif "R25" in [p[0] for p in self.positions]: # Si R25 existe mais n'est pas lue
-            #     temperatures_raw["R25"] = np.nan # Initialiser à NaN
+            #     else: temperatures_raw["R25"] = np.nan
+            # elif "R25" in [p[0] for p in self.positions]: temperatures_raw["R25"] = np.nan
 
-            real_temps_dict = temperatures_raw.copy() # Copier les températures calculées
+            real_temps_dict = temperatures_raw.copy()
 
             # --- Logique R24 (Moyenne Pondérée) pour Lecture Série ---
-            # (Identique à la logique de simulation, mais utilise les températures réelles calculées)
             weighted_sum_r24_real = 0.0
             total_weight_r24_real = 0.0
-            thermistors_r24_weights_real = {"R19": 0.1, "R20": 0.15, "R21": 0.15} # 40%
+            thermistors_r24_weights_real = {"R19": 0.1, "R20": 0.15, "R21": 0.15}
             other_thermistors_for_r24_real = []
 
-            # Identifier les autres thermistances réelles valides (déjà calculées, hors R25)
             for name, temp in real_temps_dict.items():
                 if name != "R25" and name not in thermistors_r24_weights_real and pd.notna(temp):
                      other_thermistors_for_r24_real.append(name)
 
-            # Calculer le poids pour les "autres" thermistances (pour R24)
             weight_per_other_r24_real = 0.0
             if other_thermistors_for_r24_real:
-                # Les autres se partagent 60% du poids
                 weight_per_other_r24_real = 0.6 / len(other_thermistors_for_r24_real)
 
-            # Calculer la somme pondérée et le poids total (pour R24)
             for name, temp in real_temps_dict.items():
-                 if name == "R25": continue # Exclure R25
+                 if name == "R25": continue
                  if pd.notna(temp):
-                     if name in thermistors_r24_weights_real:
-                         weight = thermistors_r24_weights_real[name]
-                     elif name in other_thermistors_for_r24_real:
-                         weight = weight_per_other_r24_real
-                     else:
-                         continue
-
+                     if name in thermistors_r24_weights_real: weight = thermistors_r24_weights_real[name]
+                     elif name in other_thermistors_for_r24_real: weight = weight_per_other_r24_real
+                     else: continue
                      weighted_sum_r24_real += temp * weight
                      total_weight_r24_real += weight
 
-            # Assigner la valeur à R24
-            if total_weight_r24_real > 1e-6:
-                real_temps_dict["R24"] = weighted_sum_r24_real / total_weight_r24_real
-            else:
-                real_temps_dict["R24"] = np.nan
+            if total_weight_r24_real > 1e-6: real_temps_dict["R24"] = weighted_sum_r24_real / total_weight_r24_real
+            else: real_temps_dict["R24"] = np.nan
 
 
         # --- CALCUL DE LA THERMISTANCE VIRTUELLE (Commun aux deux modes) ---
-        # Utilise le `real_temps_dict` qui contient maintenant R1-R11, R13-R21, R24 (calculée), et R25 (si lue/simulée)
         weighted_sum_virt = 0.0
         total_weight_virt = 0.0
-        # --- MODIFIÉ : Poids ajustés pour R_Virtuel ---
         thermistors_virt_weights = {"R14": 0.15, "R10": 0.15, "R9": 0.15} # 45%
         other_thermistors_for_virt = []
 
-        # Identifier les autres thermistances réelles valides (pour R_Virtuel)
-        # Inclut R24 mais exclut R25 et R_Virtuel elle-même
         for name, temp in real_temps_dict.items():
-            # Exclure R25, celles avec poids spécifique, et vérifier validité
             if name != "R25" and name not in thermistors_virt_weights and pd.notna(temp):
                  other_thermistors_for_virt.append(name)
 
-        # Calculer le poids pour les "autres" thermistances (pour R_Virtuel)
         weight_per_other_virt = 0.0
         if other_thermistors_for_virt:
-            # Les autres se partagent 55% du poids total (1.0 - 0.45 = 0.55)
             weight_per_other_virt = 0.55 / len(other_thermistors_for_virt)
 
-        # Calculer la somme pondérée et le poids total (pour R_Virtuel)
         for name, temp in real_temps_dict.items():
-             if name == "R25": continue # Exclure R25
+             if name == "R25": continue
              if pd.notna(temp):
-                 if name in thermistors_virt_weights:
-                     weight = thermistors_virt_weights[name]
-                 elif name in other_thermistors_for_virt:
-                     weight = weight_per_other_virt
-                 else:
-                     continue # Ignore les autres cas
-
+                 if name in thermistors_virt_weights: weight = thermistors_virt_weights[name]
+                 elif name in other_thermistors_for_virt: weight = weight_per_other_virt
+                 else: continue
                  weighted_sum_virt += temp * weight
                  total_weight_virt += weight
 
-        # Assigner la valeur à R_Virtuel
-        if total_weight_virt > 1e-6: # Éviter division par zéro
-            virtual_temp = weighted_sum_virt / total_weight_virt
-        else:
-            virtual_temp = np.nan # Si aucune thermistance valide pour la moyenne
+        if total_weight_virt > 1e-6: virtual_temp = weighted_sum_virt / total_weight_virt
+        else: virtual_temp = np.nan
 
-        real_temps_dict["R_Virtuel"] = virtual_temp # Ajouter la virtuelle au dict final
+        real_temps_dict["R_Virtuel"] = virtual_temp
 
         return real_temps_dict
 
     def afficher_heatmap_dans_figure(self, temperature_dict, fig, elapsed_time):
         fig.clear()
-        # --- MODIFIÉ : Un seul subplot pour le gradient ---
-        ax = fig.add_subplot(111) # Heatmap Magnitude Gradient
+        ax = fig.add_subplot(111) # Un seul subplot pour le gradient
 
         x_all_points, y_all_points, t_all_points = [], [], []
         valid_temps_list = []
-        thermistor_data_for_plot = [] # Gardé pour le calcul de baseline et RBF
+        thermistor_data_for_plot = []
 
-        # 1. Collecter points valides (réels + virtuel) SAUF R25 (INCHANGÉ)
+        # 1. Collecter points valides (réels + virtuel) SAUF R25
         for name, pos in self.positions:
             if name == "R25": continue
             temp_val = temperature_dict.get(name, np.nan)
@@ -498,29 +521,30 @@ class TraitementDonnees:
                 y_all_points.append(pos[1])
                 t_all_points.append(temp_val)
                 valid_temps_list.append(temp_val)
-                # Garder les données pour RBF même si on n'affiche pas les points sur ce graphe
                 thermistor_data_for_plot.append({"name": name, "pos": pos, "temp": temp_val})
 
-        # 2. Calculer baseline (basée sur points valides hors R25) (INCHANGÉ)
+        # 2. Calculer baseline (basée sur points valides hors R25)
         if not valid_temps_list:
             baseline_temp = 20.0
             print("[AVERTISSEMENT HEATMAP] Aucune donnée valide (hors R25) pour calculs.")
         else:
-            baseline_temp = min(valid_temps_list) - 0.5
+            # Utiliser le minimum comme baseline pour mieux voir le chauffage
+            baseline_temp = min(valid_temps_list) - 0.5 # Légèrement en dessous du min
 
-        # --- Section Interpolation RBF (INCHANGÉ) ---
-        r_max = 12.5
-        num_edge_points = 12
+        # --- Section Interpolation RBF ---
+        r_max = 12.5 # Rayon max de la zone d'intérêt
+        num_edge_points = 12 # Points sur le bord pour stabiliser l'interpolation
         edge_angles = np.linspace(0, 2 * np.pi, num_edge_points, endpoint=False)
         edge_x = r_max * np.cos(edge_angles)
         edge_y = r_max * np.sin(edge_angles)
-        edge_t = [baseline_temp] * num_edge_points
+        edge_t = [baseline_temp] * num_edge_points # Température du bord = baseline
 
+        # Combiner points réels/virtuels et points de bord
         x_combined = x_all_points + list(edge_x)
         y_combined = y_all_points + list(edge_y)
         t_combined = t_all_points + edge_t
 
-        # Initialisations (INCHANGÉ)
+        # Initialisations
         ti_filtered = None
         xi, yi = None, None
         mask = None
@@ -528,64 +552,91 @@ class TraitementDonnees:
         grad_magnitude_masked = None
         raw_laser_x, raw_laser_y = None, None
         raw_pos_found_this_frame = False
-        final_laser_pos_found = False
+        final_laser_pos_found = False # Renommé pour clarté
 
+        # Vérifier si assez de points pour RBF
         if len(x_combined) < 3:
             print("[ERREUR HEATMAP] Pas assez de points (hors R25) pour l'interpolation RBF.")
-            # --- MODIFIÉ : Titre pour le seul axe ---
             ax.set_title("Pas assez de données (hors R25) pour RBF/Gradient")
-            # Optionnel: Afficher les points sur cet axe si erreur
-            # for item in thermistor_data_for_plot: ...
+            # Afficher les points disponibles si erreur
+            if x_all_points:
+                 ax.scatter(x_all_points, y_all_points, c=t_all_points, cmap='plasma', marker='o', s=35)
+                 for item in thermistor_data_for_plot:
+                     ax.annotate(item["name"], item["pos"], textcoords="offset points", xytext=(4, 4), ha='left', fontsize=8)
             return
 
         try:
-            # --- Calcul RBF et Filtre Température (INCHANGÉ) ---
+            # --- Calcul RBF et Filtre Température ---
+            # 'multiquadric' est souvent un bon choix, 'smooth' contrôle le lissage
             rbf = Rbf(x_combined, y_combined, t_combined, function='multiquadric', smooth=0.5)
-            grid_size = 100
+            grid_size = 100 # Résolution de la grille (ajustable)
             xi, yi = np.meshgrid(
                 np.linspace(-r_max, r_max, grid_size),
                 np.linspace(-r_max, r_max, grid_size)
             )
-            ti = rbf(xi, yi)
-            sigma_filter_temp = 1.2
+            ti = rbf(xi, yi) # Températures interpolées sur la grille
+            # Filtre Gaussien pour lisser la carte de température
+            sigma_filter_temp = 1.2 # Sigma du filtre (ajustable)
             ti_filtered = gaussian_filter(ti, sigma=sigma_filter_temp)
+            # Masque pour cacher les zones hors du cercle d'intérêt
             mask = xi**2 + yi**2 > r_max**2
-            # ti_masked = np.ma.array(ti_filtered, mask=mask) # Plus nécessaire pour l'affichage direct
 
-            # --- Calcul du Gradient Spatial (INCHANGÉ) ---
+            # --- Calcul du Gradient Spatial ---
+            # np.gradient calcule le gradient selon les axes y et x
             grad_y, grad_x = np.gradient(ti_filtered)
+            # Magnitude du gradient (norme euclidienne)
             grad_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+            # Appliquer le masque à la magnitude du gradient pour l'affichage
             grad_magnitude_masked = np.ma.array(grad_magnitude, mask=mask)
 
-            # --- Calcul Position Laser (Max Diff -> Min Grad Local + Filtres) (INCHANGÉ) ---
+            # --- Calcul Position Laser (Max Diff -> Min Grad Local + Filtres) ---
             if self.previous_ti_filtered is not None and self.previous_ti_filtered.shape == ti_filtered.shape:
+                # 1. Calculer la différence temporelle
                 difference_map = ti_filtered - self.previous_ti_filtered
-                sigma_diff_filter = 1.5
+                # 2. Filtrer la carte de différence pour réduire le bruit
+                sigma_diff_filter = 1.5 # Sigma pour le filtre de différence (ajustable)
                 filtered_difference_map = gaussian_filter(difference_map, sigma=sigma_diff_filter)
                 filtered_difference_map_masked = np.ma.array(filtered_difference_map, mask=mask)
+
                 try:
+                    # 3. Trouver le maximum de la différence filtrée (point le plus chaud)
+                    # Utiliser nanargmax pour ignorer les NaN potentiels dus au masque
                     max_diff_idx_flat = np.nanargmax(filtered_difference_map_masked.filled(np.nan))
                     max_diff_idx = np.unravel_index(max_diff_idx_flat, filtered_difference_map_masked.shape)
                     max_diff_val = filtered_difference_map_masked[max_diff_idx]
 
+                    # Vérifier si le chauffage est significatif
                     if max_diff_val < self.min_heating_threshold:
+                        # print("[INFO LASER] Chauffage insuffisant détecté.")
                         raw_pos_found_this_frame = False
                     else:
-                        search_radius_pixels = 20
+                        # 4. Chercher le minimum du gradient autour de ce maximum
+                        search_radius_pixels = 20 # Rayon de recherche en pixels (ajustable)
                         rows, cols = np.indices(grad_magnitude.shape)
                         dist_sq_from_max_diff = (rows - max_diff_idx[0])**2 + (cols - max_diff_idx[1])**2
                         in_search_area = dist_sq_from_max_diff <= search_radius_pixels**2
+
+                        # Créer une carte de gradient limitée à la zone de recherche
                         grad_search_map = grad_magnitude.copy()
+                        # Mettre NaN hors de la zone ou sous le masque
                         grad_search_map[~in_search_area | mask] = np.nan
+
+                        # Trouver le minimum dans cette zone (position brute du laser)
                         min_grad_idx_flat = np.nanargmin(grad_search_map)
 
+                        # Vérifier si un minimum valide a été trouvé
                         if not np.isnan(grad_search_map.flat[min_grad_idx_flat]):
                             min_grad_idx = np.unravel_index(min_grad_idx_flat, grad_search_map.shape)
                             potential_laser_x = xi[min_grad_idx]
                             potential_laser_y = yi[min_grad_idx]
+
+                            # 5. Vérifier la plausibilité de la position brute
+                            # Vérifier si dans un rayon raisonnable du centre
                             distance_from_center = math.sqrt(potential_laser_x**2 + potential_laser_y**2)
-                            max_allowed_distance = 9.5
+                            max_allowed_distance = 9.5 # mm (ajustable)
                             is_within_radius = distance_from_center <= max_allowed_distance
+
+                            # Vérifier si le déplacement est plausible (limite de vitesse)
                             is_plausible_move = True
                             if self.last_valid_raw_pos is not None and is_within_radius:
                                 prev_x, prev_y = self.last_valid_raw_pos
@@ -594,11 +645,12 @@ class TraitementDonnees:
                                     is_plausible_move = False
                                     # print(f"[INFO LASER] Position brute ({potential_laser_x:.1f}, {potential_laser_y:.1f}) rejetée : déplacement trop rapide.")
 
+                            # Si la position est plausible, la garder comme position brute
                             if is_within_radius and is_plausible_move:
                                 raw_laser_x = potential_laser_x
                                 raw_laser_y = potential_laser_y
                                 raw_pos_found_this_frame = True
-                                self.last_valid_raw_pos = (raw_laser_x, raw_laser_y)
+                                self.last_valid_raw_pos = (raw_laser_x, raw_laser_y) # Mémoriser pour prochain frame
                             else:
                                 raw_pos_found_this_frame = False
                                 # if not is_within_radius:
@@ -610,78 +662,89 @@ class TraitementDonnees:
                     # print("[AVERTISSEMENT LASER] Impossible de trouver/évaluer le maximum de la différence temporelle.")
                     raw_pos_found_this_frame = False
             else:
+                # Pas de carte précédente ou forme différente
                 raw_pos_found_this_frame = False
-                self.last_valid_raw_pos = None
+                self.last_valid_raw_pos = None # Réinitialiser si pas de différence calculable
                 if self.previous_ti_filtered is None:
                     print("[INFO LASER] Attente du prochain frame pour calculer la position.")
                 elif self.previous_ti_filtered.shape != ti_filtered.shape:
                      print("[ERREUR LASER] Incohérence de forme de grille, réinitialisation.")
-                     self.previous_ti_filtered = None
+                     self.previous_ti_filtered = None # Forcer recalcul au prochain frame
 
-            # --- Filtrage Temporel (Médiane Mobile) (INCHANGÉ) ---
+            # --- Filtrage Temporel (Médiane Mobile) ---
+            # Ajouter la position brute trouvée (ou non) à l'historique
             if raw_pos_found_this_frame:
                 self.position_history.append((raw_laser_x, raw_laser_y))
+            # Garder seulement les N dernières positions
             self.position_history = self.position_history[-self.history_length:]
+
+            # Calculer la médiane si assez de points, sinon moyenne, sinon rien
             filtered_laser_x, filtered_laser_y = None, None
             if len(self.position_history) > 0:
                 valid_x = [p[0] for p in self.position_history]
                 valid_y = [p[1] for p in self.position_history]
+                # Médiane si au moins 3 points (plus robuste aux outliers)
                 if len(valid_x) >= 3:
                     filtered_laser_x = np.median(valid_x)
                     filtered_laser_y = np.median(valid_y)
+                # Moyenne si 1 ou 2 points
                 elif len(valid_x) > 0:
                      filtered_laser_x = np.mean(valid_x)
                      filtered_laser_y = np.mean(valid_y)
 
+            # Mettre à jour la position filtrée finale
             if filtered_laser_x is not None:
                 self.last_filtered_pos = (filtered_laser_x, filtered_laser_y)
-                final_laser_pos_found = True
+                final_laser_pos_found = True # On a une position filtrée à afficher
             else:
-                self.last_filtered_pos = (None, None)
+                # Garder la dernière position filtrée connue si aucune nouvelle n'est calculée
+                # self.last_filtered_pos reste inchangée
+                final_laser_pos_found = False # Pas de nouvelle position filtrée ce frame
 
         except Exception as e:
              print(f"[ERREUR RBF/GRADIENT/LASER] Échec: {e}")
-             # --- MODIFIÉ : Titre pour le seul axe ---
+             import traceback
+             traceback.print_exc()
              ax.set_title("Erreur Calcul Gradient/Laser")
-             # Optionnel: Afficher points si erreur
-             # for item in thermistor_data_for_plot: ...
-             
+             # Réinitialiser les états en cas d'erreur grave
              self.previous_ti_filtered = None
              self.last_valid_raw_pos = None
              self.position_history = []
              self.last_filtered_pos = (None, None)
              final_laser_pos_found = False
-             return
+             return # Sortir de la fonction d'affichage
 
-        # --- Mise à jour de la carte précédente (INCHANGÉ) ---
+        # --- Mise à jour de la carte précédente pour le prochain calcul de différence ---
         if ti_filtered is not None:
             self.previous_ti_filtered = ti_filtered.copy()
 
         # --- Affichage Subplot UNIQUE : Heatmap Magnitude du Gradient ---
         if grad_magnitude_masked is not None:
+            # Utiliser 'viridis' ou 'plasma' pour le gradient
             contour = ax.contourf(xi, yi, grad_magnitude_masked, levels=50, cmap="viridis")
-            fig.colorbar(contour, ax=ax, label="Magnitude Gradient Temp. (°C/mm)", shrink=0.8) # Ajusté shrink
-            # Optionnel: Afficher les points des thermistances (hors R25)
-            ax.scatter(x_all_points, y_all_points, color='white', marker='.', s=10, alpha=0.5)
+            fig.colorbar(contour, ax=ax, label="Magnitude Gradient Temp. (°C/mm)", shrink=0.8)
+            # Optionnel: Afficher les points des thermistances (hors R25) pour référence
+            ax.scatter(x_all_points, y_all_points, color='white', marker='.', s=10, alpha=0.5, label='Thermistances')
 
-            # --- MODIFIÉ : Afficher la position du laser FILTRÉE et ajouter à la légende ---
-            plot_x, plot_y = self.last_filtered_pos
-            if final_laser_pos_found:
-                # Le label contient déjà les coordonnées
+            # --- Afficher la position du laser FILTRÉE ---
+            plot_x, plot_y = self.last_filtered_pos # Utiliser la dernière position filtrée
+            if plot_x is not None: # Vérifier si une position filtrée existe
+                # Label pour la légende
                 label_laser = f'Laser (Médiane {len(self.position_history)}/{self.history_length}) @ ({plot_x:.1f}, {plot_y:.1f})'
-                ax.plot(plot_x, plot_y, 'rx', markersize=10, label=label_laser) # Croix rouge
+                # Afficher en croix rouge ('rx')
+                ax.plot(plot_x, plot_y, 'rx', markersize=10, label=label_laser)
 
             # Configuration de l'axe unique
             ax.set_aspect('equal')
-            ax.set_title(f"Gradient Température (Tps: {elapsed_time:.2f} s)", fontsize=10) # Ajusté fontsize
+            ax.set_title(f"Gradient Température (Tps: {elapsed_time:.2f} s)", fontsize=10)
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
             ax.set_xlim(-r_max - 1, r_max + 1)
             ax.set_ylim(-r_max - 1, r_max + 1)
-            # --- MODIFIÉ : Afficher la légende (inclut maintenant le laser si trouvé) ---
-            ax.legend(fontsize=8, loc='upper right') # Ajusté fontsize
+            # Afficher la légende (inclut thermistances et laser si trouvé)
+            ax.legend(fontsize=8, loc='upper right')
         else:
-            # --- MODIFIÉ : Titre pour le seul axe ---
+            # Cas où le gradient n'a pas pu être calculé
             ax.set_title("Gradient non calculé")
             ax.set_aspect('equal')
             ax.set_xlabel("X (mm)")
@@ -690,9 +753,10 @@ class TraitementDonnees:
             ax.set_ylim(-r_max - 1, r_max + 1)
 
         # --- Ajustement final de la mise en page ---
-        fig.tight_layout(pad=2.5) # Ajusté pad
-
-
+        try:
+            fig.tight_layout(pad=2.5)
+        except Exception as e_layout:
+             print(f"[AVERTISSEMENT] Erreur lors de tight_layout: {e_layout}")
 
 
     def demarrer_acquisition_live(self, interval=0.2):
@@ -701,19 +765,21 @@ class TraitementDonnees:
             return
 
         print("🚀 Acquisition live en cours... (Fermez la fenêtre pour arrêter ou Ctrl+C)")
-        fig = plt.figure(figsize=(12, 6))
-        plt.ion()
+        fig = plt.figure(figsize=(8, 7)) # Taille ajustée pour un seul plot
+        plt.ion() # Mode interactif
         fig.show()
 
-        all_data = []
-        base_headers = [name for name, _ in self.positions]
-        extra_headers = ["T_ref", "timestamp", "temps_ecoule_s"]
+        all_data = [] # Pour stocker les données à sauvegarder
+        # Définir les headers pour le CSV (inclut R_Virtuel et position laser)
+        base_headers = [name for name, _ in self.positions] # R1..R25, R_Virtuel
+        extra_headers = ["T_ref", "timestamp", "temps_ecoule_s", "laser_x_filtre", "laser_y_filtre"]
         headers = base_headers + extra_headers
 
         start_time = time.time()
         keep_running = True
         try:
             while keep_running:
+                # Vérifier si la fenêtre est toujours ouverte
                 if not plt.fignum_exists(fig.number):
                     print("\nFenêtre graphique fermée. Arrêt de l'acquisition.")
                     keep_running = False
@@ -721,35 +787,48 @@ class TraitementDonnees:
 
                 current_time = time.time()
                 elapsed_time = current_time - start_time
-                data = self.get_temperatures()
+                data = self.get_temperatures() # Récupère le dict avec R_Virtuel calculé
 
-                if data:
-                    #os.system('cls' if os.name == 'nt' else 'clear')
+                if data: # Si des données valides sont reçues/calculées
+                    # Effacer la console (optionnel, peut être bruyant)
+                    # os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
                     print("Températures mesurées")
                     print("-" * 60)
                     valid_temps_count = 0
+                    # Afficher toutes les thermistances, y compris la virtuelle
                     for name, temp in data.items():
                         display_name = name
                         if pd.notna(temp):
                             print(f"{display_name:<10} : {temp:6.2f} °C")
-                            if name != "R_Virtuel" and name != "R25":
+                            # Compter les valides réelles (hors R25 et R_Virtuel)
+                            if name not in ["R_Virtuel", "R25"]:
                                 valid_temps_count += 1
                         else:
                             print(f"{display_name:<10} :   --   °C (NaN)")
+                    # Compter les thermistances réelles attendues (hors R25 et R_Virtuel)
                     real_thermistor_count = len([p for p in self.positions if p[0] not in ["R_Virtuel", "R25"]])
                     print(f"({valid_temps_count}/{real_thermistor_count} thermistances réelles (hors R25) valides)")
+
+                    # Afficher la position laser filtrée
+                    laser_x, laser_y = self.last_filtered_pos
+                    if laser_x is not None:
+                         print("-" * 60)
+                         print(f"🎯 Position Laser (filtrée): ({laser_x:.1f}, {laser_y:.1f}) mm")
                     print("=" * 60)
 
+                    # Affichage de la heatmap (utilise le dict complet 'data')
                     self.afficher_heatmap_dans_figure(data, fig, elapsed_time)
                     fig.canvas.draw()
                     fig.canvas.flush_events()
 
+                    # Préparer la ligne pour le CSV
                     ligne = []
+                    # Utiliser R25 comme T_ref si dispo, sinon 25.0
                     t_ref_value = data.get("R25", 25.0)
-                    if pd.isna(t_ref_value): t_ref_value = 25.0
+                    if pd.isna(t_ref_value): t_ref_value = 25.0 # Fallback si R25 est NaN
 
                     for header_name in headers:
                         if header_name == "T_ref":
@@ -758,22 +837,33 @@ class TraitementDonnees:
                             ligne.append(datetime.now().isoformat(timespec='seconds'))
                         elif header_name == "temps_ecoule_s":
                             ligne.append(round(elapsed_time, 3))
+                        elif header_name == "laser_x_filtre":
+                            lx, _ = self.last_filtered_pos
+                            ligne.append(round(lx, 2) if lx is not None else '')
+                        elif header_name == "laser_y_filtre":
+                            _, ly = self.last_filtered_pos
+                            ligne.append(round(ly, 2) if ly is not None else '')
                         elif header_name in data:
                             temp_value = data[header_name]
+                            # Arrondir les températures pour le CSV, gérer NaN
                             ligne.append(round(temp_value, 2) if pd.notna(temp_value) else '')
                         else:
-                            ligne.append('')
+                            ligne.append('') # Laisser vide si header non trouvé (ne devrait pas arriver)
                     all_data.append(ligne)
 
-                else:
-                    #os.system('cls' if os.name == 'nt' else 'clear')
+                else: # Si get_temperatures retourne None ou un dict vide
+                    # os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
                     print("⚠️ Données incomplètes ou non reçues. Attente...")
                     print("=" * 60)
 
-                time.sleep(max(0, interval - (time.time() - current_time)))
+                # Pause pour respecter l'intervalle demandé
+                # Calcule le temps restant avant la prochaine itération
+                time_spent = time.time() - current_time
+                sleep_time = max(0, interval - time_spent)
+                time.sleep(sleep_time)
 
         except KeyboardInterrupt:
             print("\n🛑 Acquisition stoppée par Ctrl+C.")
@@ -781,18 +871,22 @@ class TraitementDonnees:
         finally:
             print("\n🛑 Fin de l'acquisition.")
             if plt.fignum_exists(fig.number):
-                plt.close(fig)
+                plt.close(fig) # Fermer la fenêtre graphique
 
+            # Sauvegarde du fichier CSV si des données ont été collectées
             if all_data:
                 print("💾 Sauvegarde du fichier CSV...")
+                # Sauvegarder sur le Bureau pour accès facile
                 desktop_path = Path.home() / "Desktop"
-                filename = f"acquisition_thermistances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                # Nom de fichier avec date et heure
+                filename = f"acquisition_gradient_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
                 csv_path = desktop_path / filename
                 try:
+                    # Écrire le fichier CSV
                     with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
                         writer = csv.writer(f)
-                        writer.writerow(headers)
-                        writer.writerows(all_data)
+                        writer.writerow(headers) # Écrit les headers définis plus haut
+                        writer.writerows(all_data) # Écrit toutes les lignes collectées
                     print(f"✅ Données sauvegardées dans : {csv_path}")
                 except Exception as e:
                     print(f"❌ Erreur lors de la sauvegarde du CSV : {e}")
@@ -801,5 +895,8 @@ class TraitementDonnees:
 
 
 if __name__ == "__main__":
+    # Mettre simulation=False pour utiliser l'Arduino
+    # Mettre simulation=True pour utiliser le fichier CSV
     td = TraitementDonnees(simulation=True)
-    td.demarrer_acquisition_live(interval=0.1)
+    # Intervalle de mise à jour (en secondes)
+    td.demarrer_acquisition_live(interval=0.1) # Intervalle rapide pour la simulation

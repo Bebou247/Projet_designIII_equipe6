@@ -1150,7 +1150,7 @@ class TraitementDonnees:
 
     
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=True)
+    td = TraitementDonnees(simulation=False)
     td.demarrer_acquisition_live(interval=0.1)
     #td.estimate_laser_power_from_csv()
 
