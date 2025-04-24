@@ -902,7 +902,7 @@ photodiode_tensions_976 = [pd.read_csv(path + "tensions_photodiodes_976.csv", se
 
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=False)
+    td = TraitementDonnees(simulation=True)
     td.demarrer_acquisition_live(interval=0.1)
     # Exemple d’utilisation : suppose qu'on a une position (x, y), une puissance estimée et des tensions de photodiodes
     position = (2.5, -1.5)  # position XY du spot (exemple arbitraire)

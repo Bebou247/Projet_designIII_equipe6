@@ -966,7 +966,7 @@ class TraitementDonnees:
 
 
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=False)
+    td = TraitementDonnees(simulation=True)
     td.demarrer_acquisition_live(interval=0.1)
     puissance_estimee = 0.75  # en Watts (exemple arbitraire)
 
