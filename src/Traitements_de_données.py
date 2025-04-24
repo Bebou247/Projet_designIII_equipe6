@@ -22,7 +22,7 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem14101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False, fichier_simulation=None):
+    def __init__(self, port="/dev/cu.usbmodem101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False, fichier_simulation=None):
         self.path = path
         self.port = port
         self.simulation = simulation
@@ -777,7 +777,7 @@ class TraitementDonnees:
             ax.set_ylim(-r_max - 1, r_max + 1)
 
 
-    def demarrer_acquisition_live(self, interval=2):
+    def demarrer_acquisition_live(self, interval=0.3):
         if not self.est_connecte() and not self.simulation:
             print("Arduino non connecté.")
             return

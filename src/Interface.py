@@ -115,7 +115,7 @@ class MyApp(App):
         boutons_frame.grid(row=0, column=0, pady=10)
         boutons_frame.pack(side="left", pady=10)
 
-        self.label_etat = ttk.Label(boutons_frame, anchor=tk.CENTER, text="", foreground="red", font=("Helvetica", 24, "bold"), width=16, justify=tk.CENTER)
+        self.label_etat = ttk.Label(boutons_frame, anchor=tk.CENTER, text="", foreground="red", font=("Helvetica", 18, "bold"), width=20, justify=tk.CENTER)
         self.label_etat.pack(side="top", pady=10)
         self.bouton_start = ttk.Button(boutons_frame, text="▶ Commencer", command=self.reprendre_simulation, width=16)
         self.bouton_start.pack(side="top", pady=10)
@@ -139,19 +139,19 @@ class MyApp(App):
         self.text_logs = tk.Text(self.frame_logs, height=12, font=("Courier", 16), state="disabled")
         self.text_logs.pack(fill="both")
 
-        self.fig = Figure(figsize=(5.6, 4.3), dpi=100)
+        self.fig = Figure(figsize=(6.2, 4.3), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_h_droite)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        self.fig_2 = Figure(figsize=(5.6, 4.3), dpi=100)
+        self.fig_2 = Figure(figsize=(8.3, 4.3), dpi=100)
         self.ax_2 = self.fig_2.add_subplot(111)
         self.canvas_2 = FigureCanvasTkAgg(self.fig_2, master=self.frame_h_gauche)
         self.canvas_2.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        self.img_laser = ImageTk.PhotoImage(Image.open("data/Laser_Flow_Squad.jpg").resize((300, 300)))
+        self.img_laser = ImageTk.PhotoImage(Image.open("data/Laser_Flow_Squad.jpg").resize((320, 320)))
         self.label_laser = ttk.Label(self.frame_b_droite, image=self.img_laser)
-        self.label_laser.pack(side="bottom", pady=10)
+        self.label_laser.pack(side="right", padx=(0,50))
 
     def reprendre_simulation(self):
         if self.running:
