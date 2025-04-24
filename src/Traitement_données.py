@@ -9,7 +9,7 @@ class TraitementDonnees:
     VREF = 3.3
     R_FIXED = 10000
 
-    def __init__(self, port="/dev/cu.usbmodem14201", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem14102", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.port = port
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)

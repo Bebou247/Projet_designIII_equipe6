@@ -1,4 +1,3 @@
-
 import serial
 import numpy as np
 from scipy.interpolate import Rbf
@@ -13,30 +12,36 @@ from pathlib import Path
 from scipy.ndimage import gaussian_filter
 import math
 from functools import reduce
+import pandas as pd
+from matplotlib.widgets import Slider
+from scipy.signal import savgol_filter
+
 
 
 class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False, fichier_simulation=None):
         self.path = path
         self.port = port
         self.simulation = simulation
         self.coefficients = np.load(coeffs_path, allow_pickle=True)
         self.puissance = 0
         self.data_photodiodes = [0,0,0,0,0,0]
+        self.puissance_hist = [0,0,0,0]
+        self.puissance_hist_2 = [0,0,0,0]
 
         self.correction_matrices = [pd.read_csv(self.path + f"matrice_corr_diode_{i}.csv", sep=',', decimal='.').values for i in range(6)]
-        self.photodiode_ratios_450 = [pd.read_csv(self.path + "ratios_photodiodes_450.csv", sep=';', decimal=',')[col].values
-                                for col in pd.read_csv(self.path + "ratios_photodiodes_450.csv", sep=';', decimal=',').columns]
-        self.photodiode_ratios_976 = [pd.read_csv(self.path + "ratios_photodiodes_976.csv", sep=';', decimal=',')[col].values
-                                for col in pd.read_csv(self.path + "ratios_photodiodes_976.csv", sep=';', decimal=',').columns]
-        self.photodiode_ratios_1976 = pd.read_csv(self.path + "ratios_photodiodes_1976.csv", sep=';', decimal=',').values
-        self.photodiode_tensions_450 = [pd.read_csv(self.path + "tensions_photodiodes_450.csv", sep=';', decimal=',')[col].values
-                                    for col in pd.read_csv(self.path + "tensions_photodiodes_450.csv", sep=';', decimal=',').columns]
-        self.photodiode_tensions_976 = [pd.read_csv(self.path + "tensions_photodiodes_976.csv", sep=';', decimal=',')[col].values
-                                    for col in pd.read_csv(self.path + "tensions_photodiodes_976.csv", sep=';', decimal=',').columns]
+        self.photodiode_ratios_VIS = [pd.read_csv(self.path + "ratios_photodiodes_VIS.csv", sep=';', decimal=',')[col].values
+                                for col in pd.read_csv(self.path + "ratios_photodiodes_VIS.csv", sep=';', decimal=',').columns]
+        self.photodiode_ratios_NIR = [pd.read_csv(self.path + "ratios_photodiodes_NIR.csv", sep=';', decimal=',')[col].values
+                                for col in pd.read_csv(self.path + "ratios_photodiodes_NIR.csv", sep=';', decimal=',').columns]
+        self.photodiode_ratios_IR = pd.read_csv(self.path + "ratios_photodiodes_IR.csv", sep=';', decimal=',').values
+        self.photodiode_tensions_VIS = [pd.read_csv(self.path + "tensions_photodiodes_VIS.csv", sep=';', decimal=',')[col].values
+                                    for col in pd.read_csv(self.path + "tensions_photodiodes_VIS.csv", sep=';', decimal=',').columns]
+        self.photodiode_tensions_NIR = [pd.read_csv(self.path + "tensions_photodiodes_NIR.csv", sep=';', decimal=',')[col].values
+                                    for col in pd.read_csv(self.path + "tensions_photodiodes_NIR.csv", sep=';', decimal=',').columns]
 
         # Décalage à appliquer
         decalage_x = -0.4  # vers la gauche
@@ -86,37 +91,35 @@ class TraitementDonnees:
         self.last_filtered_pos = (None, None) # Dernière position filtrée (pour affichage)
         self.max_speed_mm_per_interval = 3.0 # Max déplacement en mm entre frames (ajustable)
         self.min_heating_threshold = 0.05
+        self.fichier_simulation = fichier_simulation
         # --- FIN AJOUT ---
         if self.simulation:
             self.ser = None
             print("[SIMULATION] Mode simulation activé.")
             try:
-                script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "Hauteur 3.csv"
-                self.simulation_data = pd.read_csv(simulation_file_path)
-                #self.simulation_data = pd.read_csv(simulation_file_path, sep = ';', decimal = ',')
+                if self.fichier_simulation:
+                    simulation_file_path = Path(self.fichier_simulation)
+                else:
+                    simulation_file_path = Path(__file__).parent.parent / "data" / "Échelons 976 nm.csv"
+
+                self.simulation_data = pd.read_csv(simulation_file_path, sep=';', decimal=',')
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
 
-                missing_cols = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
-                if missing_cols:
-                    print(f"[ERREUR SIMULATION] Colonnes manquantes dans {simulation_file_path.name}: {missing_cols}")
-                    self.simulation_data = None
-                else:
-                    for col in self.simulation_columns:
-                        self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
-                    print(f"[SIMULATION] Fichier CSV chargé. {len(self.simulation_data)} lignes trouvées.")
-                    if self.simulation_data.isnull().values.any():
-                        print("[AVERTISSEMENT SIMULATION] Le fichier CSV contient des valeurs non numériques après conversion.")
+                # Nettoyage et validation
+                for col in self.simulation_data.columns:
+                    self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
+                if self.simulation_data.isnull().values.any():
+                    print("[AVERTISSEMENT SIMULATION] Le fichier CSV contient des valeurs non numériques après conversion.")
 
             except FileNotFoundError:
-                print(f"[ERREUR SIMULATION] Fichier non trouvé : {simulation_file_path.resolve()}")
+                print(f"[ERREUR SIMULATION] Fichier non trouvé : {simulation_file_path}")
                 self.simulation_data = None
             except Exception as e:
-                print(f"[ERREUR SIMULATION] Impossible de charger ou lire le fichier CSV : {e}")
+                print(f"[ERREUR SIMULATION] Problème lors du chargement du fichier CSV : {e}")
                 self.simulation_data = None
         else:
             try:
-                self.ser = serial.Serial(self.port, 9600, timeout=1)
+                self.ser = serial.Serial(self.port, 9600, timeout=0.2)
                 print(f"[INFO] Port série connecté sur {self.port}")
             except Exception as e:
                 print(f"[ERREUR] Impossible d'ouvrir le port série : {e}")
@@ -166,21 +169,27 @@ class TraitementDonnees:
 
         self.ser.reset_input_buffer()
         voltages_dict = {}
-        photodiodes_dict = {}
         start_time = time.time()
         timeout_sec = 2 # Augmenté légèrement pour la robustesse
 
         while True:
+            # print(self.ser.readline().decode(errors='ignore').strip())
             current_time = time.time()
+
             if current_time - start_time > timeout_sec:
                 print(f"⚠️ Temps de lecture dépassé ({timeout_sec}s), données incomplètes.")
                 # Retourner les données partielles ou None ? Ici on retourne partiel si on a quelque chose.
                 return voltages_dict if voltages_dict else None
+            
+            # print(self.ser.in_waiting)
 
             try:
-                if self.ser.in_waiting > 0:
+                # line = self.ser.readline().decode(errors='ignore').strip()
+                if self.ser.in_waiting >= 0:
+                # if "=== DEBUT BALAYAGE ===" in line:
+                    # print("Ça marche")
                     line = self.ser.readline().decode(errors='ignore').strip()
-                    print(f"[DEBUG RAW] Reçu: '{line}'")
+                    # print(f"[DEBUG RAW] Reçu: '{line}'")
                     if not line:
                         continue
 
@@ -189,6 +198,7 @@ class TraitementDonnees:
                         break # Sortir de la boucle while interne
 
                     match = re.search(r"Canal (\d+): ([\d.]+) V", line)
+                    # print(match)
                     if match:
                         canal = int(match.group(1))
                         if canal in self.indices_à_garder:
@@ -207,6 +217,7 @@ class TraitementDonnees:
                         #          print(f"[AVERTISSEMENT] Impossible de convertir la tension '{match.group(2)}' pour le canal {canal}")
                         #          photodiodes_dict[canal] = np.nan
                 else:
+                    # print("Ça marche pas")
                     # Petite pause pour ne pas saturer le CPU si rien n'est reçu
                     time.sleep(0.01)
 
@@ -234,17 +245,21 @@ class TraitementDonnees:
 
         # print(f"[DEBUG] Données lues avec succès: {len(voltages_dict)} canaux.") # Debug
 
-        data_phot = []
+        data_phot = [0,0,0,0,0,0]
 
-        for k, v in photodiodes_dict.items():
-            data_phot.append(v)
+        # print(voltages_dict)
+
+        for i in range(25, 31):
+            data_phot[i-25] = voltages_dict[i]
             # print(v)
+
+        # print(data_phot)
 
         # light_type, wavelength, power = self.get_wavelength()
 
         # print(f"Laser {light_type}, longueur d'onde de {wavelength:.0f} nm et puissance estimée de {power:.2f} W\n")
 
-        # self.data_photodiodes = data_phot
+        self.data_photodiodes = data_phot
 
         # print(voltages_dict)
 
@@ -255,11 +270,16 @@ class TraitementDonnees:
         real_tension_dict = {} # Dictionnaire pour les tensions réelles
 
         if self.simulation:
-            # --- Logique Simulation CSV ---
             if self.simulation_data is not None and not self.simulation_data.empty:
                 if self.simulation_index >= len(self.simulation_data):
-                    self.simulation_index = 0 # Retour au début
+                    self.simulation_index = 0
                     print("[SIMULATION] Fin du fichier CSV atteinte, retour au début.")
+
+                current_data_row = self.simulation_data.iloc[self.simulation_index]
+                self.estimate_power_from_row(current_data_row)  # 🔥 appel dynamique ici
+                self.simulation_index += 1
+                # ensuite tu construis real_temps_dict comme tu le fais déjà
+
 
                 # Lire la ligne actuelle
                 current_data_row = self.simulation_data.iloc[self.simulation_index]
@@ -756,13 +776,8 @@ class TraitementDonnees:
             ax.set_xlim(-r_max - 1, r_max + 1)
             ax.set_ylim(-r_max - 1, r_max + 1)
 
-        # --- Ajustement final de la mise en page ---
-        fig.tight_layout(pad=2.5) # Ajusté pad
 
-
-
-
-    def demarrer_acquisition_live(self, interval=0.2):
+    def demarrer_acquisition_live(self, interval=0.3):
         if not self.est_connecte() and not self.simulation:
             print("Arduino non connecté.")
             return
@@ -790,10 +805,19 @@ class TraitementDonnees:
                 elapsed_time = current_time - start_time
                 data = self.get_temperatures()
 
-                # print(data)
+                tensions = [0,0,0,0,0,0]
+
+                i = 0
+
+                for k, v in data.items():
+                    if k in self.photodiodes:
+                        tensions[i] = v
+                        i += 1
+
+                self.data_photodiodes = tensions
+
 
                 if data:
-                    #os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
@@ -802,7 +826,10 @@ class TraitementDonnees:
                     valid_temps_count = 0
 
                     for i in range(6):
-                        self.tension_photodidodes[i] = data[self.photodiodes[i]]
+                        try:
+                            self.tension_photodidodes[i] = data[self.photodiodes[i]]
+                        except:
+                            self.tension_photodidodes[i] = 0
 
                     for name, temp in data.items():
                         display_name = name
@@ -817,8 +844,7 @@ class TraitementDonnees:
                                 valid_temps_count += 1
                         else:
                             print(f"{display_name:<10} :   --   °C (NaN)")
-                    # real_thermistor_count = len([p for p in self.positions if p[0] not in ["R_Virtuel", "R25"]])
-                    # print(f"({valid_temps_count}/{real_thermistor_count} thermistances réelles (hors R25) valides)")
+
                     print("-" * 60)
                     light_type, wavelength, self.puissance = self.get_wavelength()
                     print(f"Laser {light_type}, longueur d'onde de {wavelength:.0f} nm et puissance estimée de {self.puissance:.2f} W")
@@ -844,10 +870,12 @@ class TraitementDonnees:
                             ligne.append(round(temp_value, 2) if pd.notna(temp_value) else '')
                         else:
                             ligne.append('')
+
                     all_data.append(ligne)
+                    self.all_data = all_data  
+                    # print(f"[PUISSANCE TEMP] Estimée = {self.puissance:.3f} W")
 
                 else:
-                    #os.system('cls' if os.name == 'nt' else 'clear')
                     print("=" * 60)
                     print(f"⏱️ Temps écoulé: {elapsed_time:.2f} secondes")
                     print("-" * 60)
@@ -872,8 +900,9 @@ class TraitementDonnees:
                 try:
                     with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
                         writer = csv.writer(f)
-                        writer.writerow(headers)
-                        writer.writerows(all_data)
+                        # writer.writerows(headers)
+                        # writer.writerows(all_data)
+                        writer.writerow(self.puissance_hist_2)
                     print(f"✅ Données sauvegardées dans : {csv_path}")
                 except Exception as e:
                     print(f"❌ Erreur lors de la sauvegarde du CSV : {e}")
@@ -899,38 +928,44 @@ class TraitementDonnees:
             threshold *= threshold_mult
         return wavelength
 
-    def get_visible_wavelength(self, V_corr, threshold=0.1):
+    def get_VIS_wavelength(self, V_corr, threshold=0.1):
         V_corr[-2] = 0
         ratios_corr = np.divide(V_corr[1:], V_corr[:-1], out=np.zeros_like(V_corr[1:]), where=V_corr[:-1] != 0)
-        ratio_ids_corr = [self.indexes(self.photodiode_ratios_450[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
+        ratio_ids_corr = [self.indexes(self.photodiode_ratios_VIS[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
         if not ratio_ids_corr or any(len(ids) == 0 for ids in ratio_ids_corr):
             return np.array([])
         return reduce(np.intersect1d, ratio_ids_corr)
 
     def get_NIR_wavelength(self, V_corr, threshold=0.1):
         ratios_corr = np.divide(V_corr[1:], V_corr[:-1], out=np.zeros_like(V_corr[1:]), where=V_corr[:-1] != 0)
-        ratio_ids_corr = [self.indexes(self.photodiode_ratios_976[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
+        ratio_ids_corr = [self.indexes(self.photodiode_ratios_NIR[i], ratio, threshold) for i, ratio in enumerate(ratios_corr)]
         if not ratio_ids_corr or any(len(ids) == 0 for ids in ratio_ids_corr):
             return np.array([])
         return reduce(np.intersect1d, ratio_ids_corr)
 
     def get_IR_wavelength(self, V_corr, puissance, threshold):
-        ratio = V_corr / puissance
-        return self.indexes(self.photodiode_ratios_1976, ratio, threshold)
+        if puissance != 0:
+            ratio = V_corr / puissance
+        else:
+            return [0]
+        return self.indexes(self.photodiode_ratios_IR, ratio, threshold)
 
     def get_VIS_power(self, wavelength, V_corr):
         V_corr[-2] = 0
         V_corr[-1] = 0
-        V_ratio = [10 * V_corr[i] / self.photodiode_tensions_450[i][int(wavelength) - 200] for i in range(6)
-                if self.photodiode_tensions_450[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
+        V_ratio = [10 * V_corr[i] / self.photodiode_tensions_VIS[i][int(wavelength) - 200] for i in range(6)
+                if self.photodiode_tensions_VIS[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
         return np.mean(V_ratio)
 
     def get_NIR_power(self, wavelength, V_corr):
-        V_ratio = [10 * V_corr[i] / self.photodiode_tensions_976[i][int(wavelength) - 200] for i in range(6)
-                if self.photodiode_tensions_976[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
+        V_ratio = [10 * V_corr[i] / self.photodiode_tensions_NIR[i][int(wavelength) - 200] for i in range(6)
+                if self.photodiode_tensions_NIR[i][int(wavelength) - 200] != 0 and V_corr[i] != 0]
         return np.mean(V_ratio)
+    
+    def get_IR_power(self):
+        return self.puissance 
 
-    def get_wavelength(self, threshold=0.1, threshold_mult=1.25):
+    def get_wavelength(self, threshold=0.5, threshold_mult=0.5):
         if self.last_valid_raw_pos is None:
             y, x = (0, 0)
         else:
@@ -940,35 +975,126 @@ class TraitementDonnees:
 
         V_photodiodes = self.data_photodiodes
 
+
+        for i, V in enumerate(V_photodiodes):
+            if V < 0.05:
+                V_photodiodes[i] = 0
+            # print(self.correction_matrices[i][pos])
+
         # print(V_photodiodes)
 
-        # V_corr = np.array([self.tension_photodidodes * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
-        # index_max = np.argmax(V_corr)
-
-        V_corr = V_photodiodes
+        V_corr = np.array([V * self.correction_matrices[i][pos] for i, V in enumerate(V_photodiodes)])
         index_max = np.argmax(V_corr)
+
+        # V_corr = V_photodiodes
+        # index_max = np.argmax(V_corr)
 
         # print(V_corr)
 
-        # if all(V < 0.01 for V in V_corr):
-            # return "inconnu", 0, self.puissance
-        if index_max == 0:
-            return "UV", 0, self.puissance
+        if all(V < 0.1 for V in V_corr):
+            return "inconnu", 0, 0
+        elif index_max == 0:
+            return "UV", 358, V_corr[0]/0.04
         elif index_max == 1:
-            self.wavelength = np.mean(self.precise_wavelength(self.get_visible_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
+            self.wavelength = np.mean(self.precise_wavelength(self.get_VIS_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "VIS", self.wavelength, self.get_VIS_power(self.wavelength, V_corr)
         elif index_max == 5:
+            #self.estimate_power_from_row()
             self.wavelength = np.mean(self.precise_wavelength(self.get_IR_wavelength, V_corr[-1], self.puissance, threshold=threshold, threshold_mult=threshold_mult)) + 200
-            return "IR", self.wavelength, self.puissance
+            return "IR", self.wavelength, self.get_IR_power()
         else:
             self.wavelength = np.mean(self.precise_wavelength(self.get_NIR_wavelength, V_corr, threshold=threshold, threshold_mult=threshold_mult)) + 200
             return "NIR", self.wavelength, self.get_NIR_power(self.wavelength, V_corr)
 
 
+
+
+
+    def estimate_power_from_row(self, row):
+        try:
+            temp_cols = [col for col in row.index if col.startswith("R") and col not in ["R25", "R_Virtuel"]]
+            temperatures = row[temp_cols].astype(float)
+            T_max = np.nanmax(temperatures)
+
+            T_ref = float(row["R25"]) if pd.notna(row["R25"]) else 25.0
+            delta_T = T_max - T_ref
+
+            # print(f"Temp max : {T_max} \nTemp ref : {T_ref}\nDelta temp : {delta_T}")
+
+            # PID simplifié (gain constants à ajuster si besoin)
+            # kp = 0.294*1.1
+            # kd = 12.3/6
+            # ki = 0.00026
+            # bias = -0.167
+            kp = 0.345
+            kd = 4.1
+            kdd = -3.5
+            ki = -0.00175
+            bias = -0.6
+
+            dt = 0.53  # tu peux ajuster en fonction du taux d'acquisition
+            if not hasattr(self, "delta_T_hist"):
+                self.delta_T_hist = []
+            self.delta_T_hist.append(delta_T)
+            # print(self.delta_T_hist)
+
+            if len(self.delta_T_hist) > 100:
+                self.delta_T_hist.pop(0)
+
+            delta_T_array = np.array(self.delta_T_hist)
+            delta_T_filt = 1/3*(delta_T_array[:-2] + delta_T_array[1:-1] + delta_T_array[2:])
+            # delta_T_filt = savgol_filter(delta_T_array, min(len(delta_T_array)//2*2+1, 15), 3, mode='interp') if len(delta_T_array) >= 5 else delta_T_array
+            d_delta_T_dt = np.gradient(delta_T_filt, dt)
+            integral = np.cumsum(delta_T_filt) * dt
+
+            dd_delta_T_dt = np.gradient(d_delta_T_dt, dt)
+
+            P = kp * delta_T_filt[-1]
+            D = kd * d_delta_T_dt[-1]
+            DD = kdd * dd_delta_T_dt[-1]
+            I = ki * integral[-1]
+            self.puissance_hist.append(max(0, P + D + DD + I + bias))
+
+            # if abs(self.puissance_hist[-5] - self.puissance_hist[-1]) <= 1:
+            #     for _ in range(10):
+            #         self.puissance_hist.append(max(0, P + D + DD + I + bias))
+            puissance = np.mean(self.puissance_hist[-5:])
+
+            if puissance > 0.5:
+                self.puissance = puissance
+            else:
+                self.puissance = 0
+
+            self.puissance_hist_2.append(self.puissance)
+
+        except Exception as e:
+            print(f"[ERREUR] Estimation ligne unique échouée : {e}")
+            self.puissance_est_temp_live = 0
+
+            #     plt.figure()
+            #     plt.plot(time_vals, delta_T, label='ΔT brut')
+            #     plt.plot(time_vals, delta_T_filt, label='ΔT filtré')
+            #     plt.plot(time_vals, est, label='Estimation brute')
+            #     plt.plot(time_vals, est_liss, label='Estimation lissée')
+            #     plt.xlabel("Temps (s)")
+            #     plt.ylabel("Valeurs")
+            #     plt.title("Debug estimation PID")
+            #     plt.grid(True)
+            #     plt.legend()
+            #     plt.show()
+
+
+
+
+
+
+
+
+    
 if __name__ == "__main__":
     td = TraitementDonnees(simulation=True)
     td.demarrer_acquisition_live(interval=0.1)
-    puissance_estimee = 0.75  # en Watts (exemple arbitraire)
+    #td.estimate_laser_power_from_csv()
 
     # type_lumiere, lambda_nm, puissance_corrigee = get_wavelength(
     #     position=position,
