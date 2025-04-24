@@ -779,7 +779,7 @@ class TraitementDonnees:
             ax.set_ylim(-r_max - 1, r_max + 1)
 
 
-    def demarrer_acquisition_live(self, interval=0.5):
+    def demarrer_acquisition_live(self, interval=2):
         if not self.est_connecte() and not self.simulation:
             print("Arduino non connecté.")
             return

@@ -8,6 +8,7 @@ import time
 import csv
 from pathlib import Path
 import pandas as pd
+from PIL import ImageTk, Image
 
 
 class MyApp(App):
@@ -65,46 +66,67 @@ class MyApp(App):
         self.frame.pack(expand=True, fill='both')
         self.frame.columnconfigure(0, weight=1)
         self.frame.columnconfigure(1, weight=3)
+        self.frame.rowconfigure(0, weight=1)
+        self.frame.rowconfigure(1, weight=1)
 
-        self.frame_gauche = ttk.Frame(self.frame)
-        self.frame_gauche.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.frame_h_gauche = ttk.Frame(self.frame)
+        self.frame_h_gauche.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.frame_h_droite = ttk.Frame(self.frame)
+        self.frame_h_droite.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        self.frame_b_gauche = ttk.Frame(self.frame)
+        self.frame_b_gauche.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self.frame_b_droite = ttk.Frame(self.frame)
+        self.frame_b_droite.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
 
-        self.frame_puissance = ttk.LabelFrame(self.frame_gauche, text=" Puissance estimée (W)")
-        self.frame_puissance.pack(fill="x", pady=5)
-        self.label_puissance = ttk.Label(self.frame_puissance, text="-- W", font=("Helvetica", 16, "bold"))
+        self.frame_b_droite.rowconfigure(0, weight=1)
+        self.frame_b_droite.columnconfigure(0, weight=1)
+
+        boutons_frame = ttk.Frame(self.frame_b_droite)
+        boutons_frame.grid(row=0, column=0, pady=10)
+        boutons_frame.pack(side="left", pady=10)
+
+        s = ttk.Style()
+        # s.configure('Grand.TButton', font = ("Helvetica", 32, "bold"), padding = (10, 20))
+
+        self.label_etat = ttk.Label(boutons_frame, anchor = tk.CENTER, text="", foreground="red", font = ("Helvetica", 24, "bold"), width=16, justify = tk.CENTER)
+        self.label_etat.pack(side="top", pady=10)
+        self.bouton_start = ttk.Button(boutons_frame, text="▶ Reprendre", command=self.reprendre_simulation, width=16)
+        self.bouton_start.pack(side="top", pady=10)
+        self.bouton_stop = ttk.Button(boutons_frame, text="⏹ Arrêter", command=self.arreter_live, width=16)
+        self.bouton_stop.pack(side="top", pady=10)
+        self.bouton_csv = ttk.Button(boutons_frame, text="📂 Charger CSV", command=self.choisir_csv_interface, width=16)
+        self.bouton_csv.pack(side="top", pady=10)
+
+        self.frame_puissance = ttk.LabelFrame(self.frame_b_gauche, text=" Puissance estimée (W)")
+        self.frame_puissance.pack(fill="x", padx=5, pady=5)
+        self.label_puissance = ttk.Label(self.frame_puissance, text="-- W", justify = tk.CENTER, font=("Helvetica", 32, "bold"))
         self.label_puissance.pack()
 
-        self.frame_lambda = ttk.LabelFrame(self.frame_gauche, text=" Longueur d’onde estimée (nm)")
-        self.frame_lambda.pack(fill="x", pady=5)
-        self.label_lambda = ttk.Label(self.frame_lambda, text="-- nm", font=("Helvetica", 16, "bold"))
+        self.frame_lambda = ttk.LabelFrame(self.frame_b_gauche, text=" Longueur d’onde estimée (nm)")
+        self.frame_lambda.pack(fill="x", padx=5, pady=5)
+        self.label_lambda = ttk.Label(self.frame_lambda, text="-- nm", font=("Helvetica", 32, "bold"))
         self.label_lambda.pack()
 
-        self.frame_logs = ttk.LabelFrame(self.frame_gauche, text="📜 Logs système")
-        self.frame_logs.pack(fill="both", expand=True, pady=10)
-        self.text_logs = tk.Text(self.frame_logs, height=15, font=("Courier", 10), state="disabled")
-        self.text_logs.pack(fill="both", expand=True)
+        self.frame_logs = ttk.LabelFrame(self.frame_b_gauche, text="📜 Logs système")
+        self.frame_logs.pack(fill="both", padx=5, pady=10)
+        self.text_logs = tk.Text(self.frame_logs, height=12, font=("Courier", 16), state="disabled")
+        self.text_logs.pack(fill="both")
 
-        self.frame_droite = ttk.Frame(self.frame)
-        self.frame_droite.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-        self.frame_droite.rowconfigure(0, weight=1)
-        self.frame_droite.columnconfigure(0, weight=1)
-
-        self.fig = Figure(figsize=(6, 5), dpi=100)
+        self.fig = Figure(figsize=(5.6, 4.3), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_droite)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_h_droite)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        boutons_frame = ttk.Frame(self.frame_droite)
-        boutons_frame.grid(row=1, column=0, pady=10)
-        self.bouton_start = ttk.Button(boutons_frame, text="▶ Reprendre", command=self.reprendre_simulation)
-        self.bouton_start.pack(side="left", padx=10)
-        self.bouton_stop = ttk.Button(boutons_frame, text="⏹ Arrêter", command=self.arreter_live)
-        self.bouton_stop.pack(side="left", padx=10)
-        self.bouton_csv = ttk.Button(boutons_frame, text="📂 Charger CSV", command=self.choisir_csv_interface)
-        self.bouton_csv.pack(side="left", padx=10)
+        self.fig_2 = Figure(figsize=(8.3, 4.3), dpi=100)
+        self.ax_2 = self.fig_2.add_subplot(111)
+        self.canvas_2 = FigureCanvasTkAgg(self.fig_2, master=self.frame_h_gauche)
+        self.canvas_2.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        self.label_etat = ttk.Label(self.frame_droite, text="", foreground="red")
-        self.label_etat.grid(row=2, column=0, pady=5)
+        img = ImageTk.PhotoImage(Image.open("data/Laser_Flow_Squad.jpg"))
+        label = ttk.Label(self.frame_b_droite, image = img)
+        label.pack()
+
+
 
     def reprendre_simulation(self):
         if self.running:
@@ -121,7 +143,7 @@ class MyApp(App):
         self.td = TraitementDonnees(simulation=False, path="data/")
         self.running = True
         self.start_time = time.time()
-        self.label_etat.config(text="Lecture en cours.", foreground="blue")
+        self.label_etat.config(text="Lecture en cours.", foreground="cyan")
         self.bouton_start.state(["disabled"])
         self.bouton_csv.state(["disabled"])
         self.log("▶ Acquisition démarrée")
