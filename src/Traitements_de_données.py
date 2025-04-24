@@ -22,7 +22,7 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem14101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
         self.path = path
         self.port = port
         self.simulation = simulation
@@ -1094,7 +1094,7 @@ class TraitementDonnees:
 
     
 if __name__ == "__main__":
-    td = TraitementDonnees(simulation=True)
+    td = TraitementDonnees(simulation=False)
     td.demarrer_acquisition_live(interval=0.1)
     #td.estimate_laser_power_from_csv()
 

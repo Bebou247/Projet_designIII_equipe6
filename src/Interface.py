@@ -107,7 +107,7 @@ class MyApp(App):
         self.label_lambda = ttk.Label(self.frame_lambda, text="-- nm", font=("Helvetica", 32, "bold"))
         self.label_lambda.pack()
 
-        self.frame_logs = ttk.LabelFrame(self.frame_b_gauche, text="📜 Logs système")
+        self.frame_logs = ttk.LabelFrame(self.frame_b_gauche, text="Logs système")
         self.frame_logs.pack(fill="both", padx=5, pady=10)
         self.text_logs = tk.Text(self.frame_logs, height=12, font=("Courier", 16), state="disabled")
         self.text_logs.pack(fill="both")
@@ -122,9 +122,10 @@ class MyApp(App):
         self.canvas_2 = FigureCanvasTkAgg(self.fig_2, master=self.frame_h_gauche)
         self.canvas_2.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        img = ImageTk.PhotoImage(Image.open("data/Laser_Flow_Squad.jpg"))
-        label = ttk.Label(self.frame_b_droite, image = img)
-        label.pack()
+        self.img_laser = ImageTk.PhotoImage(Image.open("data/Laser_Flow_Squad.jpg").resize((300, 300)))  # ajuste la taille si besoin
+        self.label_laser = ttk.Label(self.frame_b_droite, image=self.img_laser)
+        self.label_laser.pack(side="bottom", pady=10)  # ou .grid(row=1, column=0), selon ton layout
+
 
 
 
@@ -174,9 +175,9 @@ class MyApp(App):
                             writer.writerow(row.values())
                     self.log(f"📅 Données sauvegardées : {filepath}")
                 except Exception as e:
-                    self.log(f"❌ Erreur lors de la sauvegarde : {e}")
+                    self.log(f"Erreur lors de la sauvegarde : {e}")
             else:
-                self.log("⛔ Sauvegarde ignorée par l'utilisateur.")
+                self.log("Sauvegarde ignorée par l'utilisateur.")
 
     def rejouer_simulation(self, fichier=None):
         if not fichier:
