@@ -22,7 +22,7 @@ class TraitementDonnees:
     VREF = 3.003
     R_FIXED = 4700
 
-    def __init__(self, port="/dev/cu.usbmodem14101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False):
+    def __init__(self, port="/dev/cu.usbmodem14101",path = "data/", coeffs_path="data/raw/coefficients.npy", simulation=False, fichier_simulation=None):
         self.path = path
         self.port = port
         self.simulation = simulation
@@ -91,33 +91,31 @@ class TraitementDonnees:
         self.last_filtered_pos = (None, None) # Dernière position filtrée (pour affichage)
         self.max_speed_mm_per_interval = 3.0 # Max déplacement en mm entre frames (ajustable)
         self.min_heating_threshold = 0.05
+        self.fichier_simulation = fichier_simulation
         # --- FIN AJOUT ---
         if self.simulation:
             self.ser = None
             print("[SIMULATION] Mode simulation activé.")
             try:
-                script_dir = Path(__file__).parent
-                simulation_file_path = script_dir.parent / "data" / "Échelons 976 nm.csv"
-                #self.simulation_data = pd.read_csv(simulation_file_path)
-                self.simulation_data = pd.read_csv(simulation_file_path, sep = ',', decimal = '.')
+                if self.fichier_simulation:
+                    simulation_file_path = Path(self.fichier_simulation)
+                else:
+                    simulation_file_path = Path(__file__).parent.parent / "data" / "Échelons 976 nm.csv"
+
+                self.simulation_data = pd.read_csv(simulation_file_path, sep=';', decimal=',')
                 print(f"[SIMULATION] Chargement du fichier CSV : {simulation_file_path.resolve()}")
 
-                missing_cols = [col for col in self.simulation_columns if col not in self.simulation_data.columns]
-                if missing_cols:
-                    print(f"[ERREUR SIMULATION] Colonnes manquantes dans {simulation_file_path.name}: {missing_cols}")
-                    self.simulation_data = None
-                else:
-                    for col in self.simulation_columns:
-                        self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
-                    print(f"[SIMULATION] Fichier CSV chargé. {len(self.simulation_data)} lignes trouvées.")
-                    if self.simulation_data.isnull().values.any():
-                        print("[AVERTISSEMENT SIMULATION] Le fichier CSV contient des valeurs non numériques après conversion.")
+                # Nettoyage et validation
+                for col in self.simulation_data.columns:
+                    self.simulation_data[col] = pd.to_numeric(self.simulation_data[col], errors='coerce')
+                if self.simulation_data.isnull().values.any():
+                    print("[AVERTISSEMENT SIMULATION] Le fichier CSV contient des valeurs non numériques après conversion.")
 
             except FileNotFoundError:
-                print(f"[ERREUR SIMULATION] Fichier non trouvé : {simulation_file_path.resolve()}")
+                print(f"[ERREUR SIMULATION] Fichier non trouvé : {simulation_file_path}")
                 self.simulation_data = None
             except Exception as e:
-                print(f"[ERREUR SIMULATION] Impossible de charger ou lire le fichier CSV : {e}")
+                print(f"[ERREUR SIMULATION] Problème lors du chargement du fichier CSV : {e}")
                 self.simulation_data = None
         else:
             try:

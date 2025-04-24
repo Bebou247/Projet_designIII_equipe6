@@ -27,24 +27,45 @@ class MyApp(App):
         self.running = False
         self.simulation_completee = False
         self.donnees_enregistrées = []
+        self.acquisition_manuelle = False
+        self.premiere_lecture = True
 
         self.build_interface()
 
         if self.arduino_disponible():
             self.simulation_mode = False
             self.td = TraitementDonnees(simulation=False, path="data/")
-            print("Arduino détecté")
             self.log_mode = "Arduino détecté. Mode acquisition live."
         else:
             self.simulation_mode = True
             self.log_mode = "Arduino non détecté. Mode simulation."
             self.label_etat.config(text=self.log_mode, foreground="orange")
-            self.log(self.log_mode)
             self.after(100, self.choisir_csv_interface)
 
-        self.maj_etat_connection()
+        self.maj_etat_connexion()
         self.check_connection_loop()
         self.log(self.log_mode)
+
+    def log(self, message):
+        horodatage = time.strftime("[%H:%M:%S]")
+        self.text_logs.config(state="normal")
+        self.text_logs.insert(tk.END, f"{horodatage} {message}\n")
+        self.text_logs.config(state="disabled")
+        self.text_logs.see(tk.END)
+    
+        def rejouer_simulation(self, fichier=None):
+            if not fichier:
+                return
+            self.simulation_mode = True
+            self.fichier_simulation = fichier
+            self.td = TraitementDonnees(simulation=True, path="data/", fichier_simulation=fichier)
+            self.td.simulation_index = 0
+            self.simulation_completee = False
+            self.label_etat.config(text="Mode simulation.", foreground="orange")
+            self.log(f"Lectures du fichier : {fichier}")
+            self.premiere_lecture = True
+            self.bouton_start.config(text="▶ Commencer")
+            self.demarrer_live()
 
     def arduino_disponible(self):
         try:
@@ -52,6 +73,14 @@ class MyApp(App):
             return test.est_connecte()
         except:
             return False
+
+    def maj_etat_connexion(self):
+        if not self.td or not self.td.est_connecte():
+            self.label_etat.config(text="Arduino non connecté", foreground="red")
+            self.log("Arduino non connecté =-(")
+        else:
+            self.label_etat.config(text=" Prêt", foreground="green")
+            self.log(" Arduino connecté")
 
     def choisir_csv_interface(self):
         fichier = filedialog.askopenfilename(initialdir=self.dossier_sauvegarde, title="Choisir un fichier CSV", filetypes=[("Fichiers CSV", "*.csv")])
@@ -64,6 +93,7 @@ class MyApp(App):
     def build_interface(self):
         self.frame = ttk.Frame(self.window.widget, padding=10)
         self.frame.pack(expand=True, fill='both')
+
         self.frame.columnconfigure(0, weight=1)
         self.frame.columnconfigure(1, weight=3)
         self.frame.rowconfigure(0, weight=1)
@@ -85,12 +115,9 @@ class MyApp(App):
         boutons_frame.grid(row=0, column=0, pady=10)
         boutons_frame.pack(side="left", pady=10)
 
-        s = ttk.Style()
-        # s.configure('Grand.TButton', font = ("Helvetica", 32, "bold"), padding = (10, 20))
-
-        self.label_etat = ttk.Label(boutons_frame, anchor = tk.CENTER, text="", foreground="red", font = ("Helvetica", 24, "bold"), width=16, justify = tk.CENTER)
+        self.label_etat = ttk.Label(boutons_frame, anchor=tk.CENTER, text="", foreground="red", font=("Helvetica", 24, "bold"), width=16, justify=tk.CENTER)
         self.label_etat.pack(side="top", pady=10)
-        self.bouton_start = ttk.Button(boutons_frame, text="▶ Reprendre", command=self.reprendre_simulation, width=16)
+        self.bouton_start = ttk.Button(boutons_frame, text="▶ Commencer", command=self.reprendre_simulation, width=16)
         self.bouton_start.pack(side="top", pady=10)
         self.bouton_stop = ttk.Button(boutons_frame, text="⏹ Arrêter", command=self.arreter_live, width=16)
         self.bouton_stop.pack(side="top", pady=10)
@@ -99,7 +126,7 @@ class MyApp(App):
 
         self.frame_puissance = ttk.LabelFrame(self.frame_b_gauche, text=" Puissance estimée (W)")
         self.frame_puissance.pack(fill="x", padx=5, pady=5)
-        self.label_puissance = ttk.Label(self.frame_puissance, text="-- W", justify = tk.CENTER, font=("Helvetica", 32, "bold"))
+        self.label_puissance = ttk.Label(self.frame_puissance, text="-- W", justify=tk.CENTER, font=("Helvetica", 32, "bold"))
         self.label_puissance.pack()
 
         self.frame_lambda = ttk.LabelFrame(self.frame_b_gauche, text=" Longueur d’onde estimée (nm)")
@@ -117,17 +144,14 @@ class MyApp(App):
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_h_droite)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        self.fig_2 = Figure(figsize=(8.3, 4.3), dpi=100)
+        self.fig_2 = Figure(figsize=(5.6, 4.3), dpi=100)
         self.ax_2 = self.fig_2.add_subplot(111)
         self.canvas_2 = FigureCanvasTkAgg(self.fig_2, master=self.frame_h_gauche)
         self.canvas_2.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        self.img_laser = ImageTk.PhotoImage(Image.open("data/Laser_Flow_Squad.jpg").resize((300, 300)))  # ajuste la taille si besoin
+        self.img_laser = ImageTk.PhotoImage(Image.open("data/Laser_Flow_Squad.jpg").resize((300, 300)))
         self.label_laser = ttk.Label(self.frame_b_droite, image=self.img_laser)
-        self.label_laser.pack(side="bottom", pady=10)  # ou .grid(row=1, column=0), selon ton layout
-
-
-
+        self.label_laser.pack(side="bottom", pady=10)
 
     def reprendre_simulation(self):
         if self.running:
@@ -135,13 +159,19 @@ class MyApp(App):
         if self.simulation_mode and self.simulation_completee:
             self.simulation_completee = False
             self.td.simulation_index = 0
+        if self.premiere_lecture:
+            self.bouton_start.config(text="▶ Continuer")
+            self.premiere_lecture = False
         self.log("▶ Reprise de la simulation")
         self.after(100, self.demarrer_live)
 
     def demarrer_live(self):
         if self.running:
             return
-        self.td = TraitementDonnees(simulation=False, path="data/")
+        if not self.td:
+            self.td = TraitementDonnees(simulation=self.simulation_mode, path="data/")
+        elif not self.simulation_mode:
+            self.td = TraitementDonnees(simulation=False, path="data/")
         self.running = True
         self.start_time = time.time()
         self.label_etat.config(text="Lecture en cours.", foreground="cyan")
@@ -149,8 +179,28 @@ class MyApp(App):
         self.bouton_csv.state(["disabled"])
         self.log("▶ Acquisition démarrée")
         self.donnees_enregistrées.clear()
-        print("Début des acquisitions de données")
         self.mettre_a_jour_interface()
+
+    def mettre_a_jour_interface(self):
+        if self.running and (self.td.est_connecte() or self.td.simulation):
+            data = self.td.get_temperatures()
+            if data:
+                elapsed_time = time.time() - self.start_time
+                self.td.afficher_heatmap_dans_figure(data, self.fig, elapsed_time=elapsed_time)
+                self.canvas.draw()
+                light_type, lambda_nm, puissance = self.td.get_wavelength()
+                self.label_puissance.config(text=f"{puissance:.2f} W")
+                self.label_lambda.config(text=f"{lambda_nm:.1f} nm")
+                row = {k: v for k, v in data.items()}
+                row["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                self.donnees_enregistrées.append(row)
+
+            if self.td.simulation and self.td.simulation_index >= len(self.td.simulation_data):
+                self.simulation_completee = True
+                self.arreter_live()
+                return
+
+            self.window.widget.after(200, self.mettre_a_jour_interface)
 
     def arreter_live(self):
         if not self.running:
@@ -162,8 +212,8 @@ class MyApp(App):
         self.bouton_csv.state(["!disabled"])
         self.log("⏹ Acquisition arrêtée")
 
-        if self.simulation_mode and self.donnees_enregistrées:
-            reponse = messagebox.askyesno("Sauvegarde", "Voulez-vous sauvegarder les données de cette simulation ?")
+        if not self.fichier_simulation and self.donnees_enregistrées:
+            reponse = messagebox.askyesno("Sauvegarde", "Voulez-vous sauvegarder les données de cette session ?")
             if reponse:
                 filename = f"acquisition_{time.strftime('%Y%m%d_%H%M%S')}.csv"
                 filepath = self.dossier_sauvegarde / filename
@@ -173,15 +223,13 @@ class MyApp(App):
                         writer.writerow(self.donnees_enregistrées[0].keys())
                         for row in self.donnees_enregistrées:
                             writer.writerow(row.values())
-                    self.log(f"📅 Données sauvegardées : {filepath}")
+                    self.log(f"🗓 Données sauvegardées : {filepath}")
                 except Exception as e:
                     self.log(f"Erreur lors de la sauvegarde : {e}")
             else:
                 self.log("Sauvegarde ignorée par l'utilisateur.")
 
     def rejouer_simulation(self, fichier=None):
-        if not fichier:
-            fichier = self.selectionner_csv()
         if not fichier:
             return
         self.simulation_mode = True
@@ -192,48 +240,9 @@ class MyApp(App):
         self.simulation_completee = False
         self.label_etat.config(text="Mode simulation.", foreground="orange")
         self.log(f"Lectures du fichier : {fichier}")
+        self.premiere_lecture = True
+        self.bouton_start.config(text="▶ Commencer")
         self.demarrer_live()
-
-    def log(self, message):
-        horodatage = time.strftime("[%H:%M:%S]")
-        self.text_logs.config(state="normal")
-        self.text_logs.insert(tk.END, f"{horodatage} {message}\n")
-        self.text_logs.config(state="disabled")
-        self.text_logs.see(tk.END)
-
-    def maj_etat_connection(self):
-        if not self.td or not self.td.est_connecte():
-            self.label_etat.config(text="Arduino non connecté", foreground="red")
-            self.log("Arduino non connecté =-(")
-        else:
-            self.label_etat.config(text=" Prêt", foreground="green")
-            self.log(" Arduino connecté")
-
-    def mettre_a_jour_interface(self):
-        if self.running and (self.td.est_connecte() or self.td.simulation):
-            # print(self.td.est_connecte())
-            # print(self.td.ser)
-            data = self.td.get_temperatures()
-            print(data)
-            if data:
-                elapsed_time = time.time() - self.start_time
-                self.td.afficher_heatmap_dans_figure(data, self.fig, elapsed_time=elapsed_time)
-                self.canvas.draw()
-                light_type, lambda_nm, puissance = self.td.get_wavelength()
-                print(f"Laser de type {light_type}, longueur d'onde de {lambda_nm} et de puissance de {puissance} W")
-                self.label_puissance.config(text=f"{puissance:.2f} W")
-                self.label_lambda.config(text=f"{lambda_nm:.1f} nm")
-                row = {k: v for k, v in data.items()}
-                row["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                self.donnees_enregistrées.append(row)
-
-            if self.td.simulation and self.td.simulation_index >= len(self.td.simulation_data):
-                print("WTF")
-                self.simulation_completee = True
-                self.arreter_live()
-                return
-
-            self.window.widget.after(200, self.mettre_a_jour_interface)
 
     def check_connection_loop(self):
         if not self.td or not self.td.est_connecte():
@@ -244,8 +253,7 @@ class MyApp(App):
                 self.log("🔌 Arduino reconnecté")
         self.window.widget.after(3000, self.check_connection_loop)
 
+
 if __name__ == "__main__":
     app = MyApp()
     app.mainloop()
-
-td = TraitementDonnees()
