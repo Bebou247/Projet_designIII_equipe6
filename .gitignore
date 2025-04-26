@@ -1,4 +1,10 @@
+.venv/
 venv/
-*.pyc
 __pycache__/
-*.csv
+*.pyc
+*.pyo
+*.pyd
+*.DS_Store
+build/
+dist/
+*.spec
