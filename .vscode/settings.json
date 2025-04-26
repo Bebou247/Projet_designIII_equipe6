@@ -1,0 +1,7 @@
+{
+  "files.exclude": {
+    "**/src/*.py": true,
+    "**/src/Interface.py": false,
+    "**/src/Traitements_de_données.py": false
+  }
+}
