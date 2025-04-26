@@ -700,8 +700,8 @@ class TraitementDonnees:
         except Exception as e:
             self.puissance_est_temp_live = 0
 
-if __name__ == "__main__":
-    td = TraitementDonnees(simulation=True) 
+#if __name__ == "__main__":
+    #td = TraitementDonnees(simulation=True) 
     #td.demarrer_acquisition_simulation(interval=0.1)
     #td.afficher_heatmap_dans_figure()
 
